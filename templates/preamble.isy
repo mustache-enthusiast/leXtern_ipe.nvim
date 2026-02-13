@@ -1,0 +1,19 @@
+<ipestyle name="lextern-preamble">
+<!--
+  leXtern_ipe.nvim preamble stylesheet
+
+  Add your LaTeX packages and macros here so that text rendered
+  inside IPE figures matches your main document. Set the IPESTYLES
+  environment variable to point to this file:
+
+    export IPESTYLES="$HOME/.config/ipe/lextern-preamble.isy"
+
+  Or pass it when launching IPE:
+
+    ipe -sheet /path/to/lextern-preamble.isy figure.ipe
+-->
+<preamble>
+\usepackage{amsmath,amssymb,amsthm}
+% Add your own packages and macros below:
+</preamble>
+</ipestyle>
