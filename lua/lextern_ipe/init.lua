@@ -7,8 +7,6 @@ local M = {}
 M.config = {
   -- Directory creation behavior: "ask", "always", "never"
   dir_create_mode = "ask",
-  -- Figures subdirectory name (relative to project root)
-  figures_dir = "figures",
   -- Extra flags passed to rofi (e.g. "-theme my-theme")
   rofi_opts = "",
   -- Debounce interval for file watcher (ms)
@@ -105,30 +103,33 @@ local function ensure_dir(directory)
 end
 
 --- Get the absolute path to the figures directory
---- Uses VimTeX root if available, falls back to current file's directory
+--- Derives from current buffer: foo.tex -> foo_figures/
+--- Returns absolute path (with trailing slash) or nil + error message
 local function get_figures_dir()
-  local root
-
-  if vim.b.vimtex and vim.b.vimtex.root then
-    root = vim.b.vimtex.root
-  else
-    local current = vim.fn.expand("%:p")
-    if current == "" then
-      return nil, "No file open"
-    end
-    root = vim.fn.fnamemodify(current, ":h")
+  local current = vim.fn.expand("%:p")
+  if current == "" then
+    return nil, "No file open"
   end
 
-  local fig_dir = vim.fn.fnamemodify(root .. "/" .. M.config.figures_dir, ":p")
-  -- Normalize trailing slash (fnamemodify :p only adds it if dir already exists)
-  if fig_dir:sub(-1) ~= "/" then
-    fig_dir = fig_dir .. "/"
-  end
+  local dir = vim.fn.fnamemodify(current, ":h")
+  local basename = vim.fn.fnamemodify(current, ":t:r")
+  local fig_dir = dir .. "/" .. basename .. "_figures/"
+
   local ok, err = ensure_dir(fig_dir)
   if not ok then
     return nil, err
   end
   return fig_dir
+end
+
+--- Get the figures directory name relative to the tex file
+--- e.g. "lecture-01_figures"
+local function get_figures_reldir()
+  local basename = vim.fn.expand("%:t:r")
+  if basename == "" then
+    return nil, "No file open"
+  end
+  return basename .. "_figures"
 end
 
 --- List .ipe files in a directory, returning basenames without extension
@@ -411,7 +412,8 @@ function M.create_figure()
   end
 
   -- Insert \incfig at cursor
-  insert_at_cursor(string.format("\\incfig{%s}{}", filename))
+  local reldir = get_figures_reldir()
+  insert_at_cursor(string.format("\\incfig{%s/%s}{}", reldir, filename))
 
   open_ipe(ipe_path)
   ensure_watcher()
@@ -465,7 +467,8 @@ function M.insert_figure()
     return
   end
 
-  insert_at_cursor(string.format("\\incfig{%s}{}", selected))
+  local reldir = get_figures_reldir()
+  insert_at_cursor(string.format("\\incfig{%s/%s}{}", reldir, selected))
 end
 
 return M
