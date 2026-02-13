@@ -11,6 +11,11 @@ M.config = {
   rofi_opts = "",
   -- Debounce interval for file watcher (ms)
   debounce_ms = 100,
+  -- Open IPE in a floating window (requires Hyprland)
+  floating = false,
+  -- Floating window dimensions (pixels)
+  float_width = 900,
+  float_height = 700,
 }
 
 -- ============================================================
@@ -201,7 +206,20 @@ local function open_ipe(filepath)
     vim.notify("ipe is not installed", vim.log.levels.ERROR)
     return false
   end
-  vim.fn.jobstart({ "ipe", filepath }, { detach = true })
+
+  if M.config.floating then
+    if not has_command("hyprctl") then
+      vim.notify("floating=true requires Hyprland (hyprctl not found)", vim.log.levels.WARN)
+      vim.fn.jobstart({ "ipe", filepath }, { detach = true })
+    else
+      local rules = string.format("[float;size %d %d;center]",
+        M.config.float_width, M.config.float_height)
+      vim.fn.system(string.format('hyprctl dispatch exec "%s" -- ipe "%s"', rules, filepath))
+    end
+  else
+    vim.fn.jobstart({ "ipe", filepath }, { detach = true })
+  end
+
   return true
 end
 
