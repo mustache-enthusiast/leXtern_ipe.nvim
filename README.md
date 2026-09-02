@@ -15,6 +15,11 @@ so they pick up whatever UI provider you have configured (e.g.
 [telescope-ui-select](https://github.com/nvim-telescope/telescope-ui-select.nvim)),
 or fall back to Neovim's native prompts otherwise.
 
+Run `:checkhealth lextern_ipe` to verify `ipe`/`ipetoipe` are on PATH, your
+config is valid, and to see whether `kpsewhich` is available (optional --
+used to resolve `\incfig` definitions in a loaded class/package; see
+[LaTeX setup](#latex-setup)).
+
 ## Setup
 
 Lazy.nvim:
