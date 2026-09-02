@@ -7,15 +7,12 @@ local M = {}
 M.config = {
   -- Directory creation behavior: "ask", "always", "never"
   dir_create_mode = "ask",
-  -- Extra flags passed to rofi (e.g. "-theme my-theme")
-  rofi_opts = "",
   -- Debounce interval for file watcher (ms)
   debounce_ms = 100,
-  -- Open IPE in a floating window (requires Hyprland)
-  floating = false,
-  -- Floating window dimensions (pixels)
-  float_width = 900,
-  float_height = 700,
+  -- Optional function(filepath) to launch IPE yourself, e.g. to open it
+  -- floating under a tiling WM. Receives the absolute path to the .ipe
+  -- file. When nil, IPE is launched as a plain detached job.
+  launch_cmd = nil,
 }
 
 -- ============================================================
@@ -154,46 +151,27 @@ local function has_command(cmd)
 end
 
 -- ============================================================
--- Rofi integration
+-- User prompts
 -- ============================================================
 
---- Prompt for text input via rofi
---- Returns the entered string, or nil if cancelled
-local function rofi_input(prompt)
-  if not has_command("rofi") then
-    vim.notify("rofi is not installed", vim.log.levels.ERROR)
-    return nil
-  end
-  local cmd = string.format('rofi -dmenu -p "%s" -lines 0 %s', prompt, M.config.rofi_opts)
-  local result = vim.fn.system(cmd)
-  if vim.v.shell_error ~= 0 then
-    return nil
-  end
-  result = vim.trim(result)
-  if result == "" then
-    return nil
-  end
-  return result
+--- Prompt for text input. Calls callback(result) with the entered
+--- string, or callback(nil) if cancelled/empty.
+local function ui_input(prompt, callback)
+  vim.ui.input({ prompt = prompt .. ": " }, function(result)
+    if not result or vim.trim(result) == "" then
+      callback(nil)
+      return
+    end
+    callback(vim.trim(result))
+  end)
 end
 
---- Select from a list via rofi
---- Returns the selected item, or nil if cancelled
-local function rofi_select(items, prompt)
-  if not has_command("rofi") then
-    vim.notify("rofi is not installed", vim.log.levels.ERROR)
-    return nil
-  end
-  local input = table.concat(items, "\n")
-  local cmd = string.format('rofi -dmenu -i -p "%s" %s', prompt, M.config.rofi_opts)
-  local result = vim.fn.system(cmd, input)
-  if vim.v.shell_error ~= 0 then
-    return nil
-  end
-  result = vim.trim(result)
-  if result == "" then
-    return nil
-  end
-  return result
+--- Select from a list. Calls callback(item) with the chosen item,
+--- or callback(nil) if cancelled.
+local function ui_select(items, prompt, callback)
+  vim.ui.select(items, { prompt = prompt }, function(choice)
+    callback(choice)
+  end)
 end
 
 -- ============================================================
@@ -207,15 +185,8 @@ local function open_ipe(filepath)
     return false
   end
 
-  if M.config.floating then
-    if not has_command("hyprctl") then
-      vim.notify("floating=true requires Hyprland (hyprctl not found)", vim.log.levels.WARN)
-      vim.fn.jobstart({ "ipe", filepath }, { detach = true })
-    else
-      local rules = string.format("[float;size %d %d;center]",
-        M.config.float_width, M.config.float_height)
-      vim.fn.system(string.format('hyprctl dispatch exec "%s" -- ipe "%s"', rules, filepath))
-    end
+  if M.config.launch_cmd then
+    M.config.launch_cmd(filepath)
   else
     vim.fn.jobstart({ "ipe", filepath }, { detach = true })
   end
@@ -398,45 +369,46 @@ end
 -- ============================================================
 
 function M.create_figure()
-  local name = rofi_input("Figure name")
-  if not name then
-    return
-  end
+  ui_input("Figure name", function(name)
+    if not name then
+      return
+    end
 
-  local filename, err = sanitize_filename(name)
-  if not filename then
-    vim.notify(err, vim.log.levels.ERROR)
-    return
-  end
+    local filename, err = sanitize_filename(name)
+    if not filename then
+      vim.notify(err, vim.log.levels.ERROR)
+      return
+    end
 
-  local fig_dir
-  fig_dir, err = get_figures_dir()
-  if not fig_dir then
-    vim.notify(err, vim.log.levels.ERROR)
-    return
-  end
+    local fig_dir
+    fig_dir, err = get_figures_dir()
+    if not fig_dir then
+      vim.notify(err, vim.log.levels.ERROR)
+      return
+    end
 
-  local ipe_path = fig_dir .. filename .. ".ipe"
-  if vim.fn.filereadable(ipe_path) == 1 then
-    vim.notify("Figure already exists: " .. filename .. ".ipe", vim.log.levels.WARN)
-    return
-  end
+    local ipe_path = fig_dir .. filename .. ".ipe"
+    if vim.fn.filereadable(ipe_path) == 1 then
+      vim.notify("Figure already exists: " .. filename .. ".ipe", vim.log.levels.WARN)
+      return
+    end
 
-  local ok
-  ok, err = create_ipe_from_template(ipe_path)
-  if not ok then
-    vim.notify(err, vim.log.levels.ERROR)
-    return
-  end
+    local ok
+    ok, err = create_ipe_from_template(ipe_path)
+    if not ok then
+      vim.notify(err, vim.log.levels.ERROR)
+      return
+    end
 
-  -- Insert \incfig at cursor
-  local reldir = get_figures_reldir()
-  insert_at_cursor(string.format("\\incfig{%s/%s}{}", reldir, filename))
+    -- Insert \incfig at cursor
+    local reldir = get_figures_reldir()
+    insert_at_cursor(string.format("\\incfig{%s/%s}{}", reldir, filename))
 
-  open_ipe(ipe_path)
-  ensure_watcher()
+    open_ipe(ipe_path)
+    ensure_watcher()
 
-  vim.notify("Created: " .. filename .. ".ipe", vim.log.levels.INFO)
+    vim.notify("Created: " .. filename .. ".ipe", vim.log.levels.INFO)
+  end)
 end
 
 function M.edit_figure()
@@ -452,19 +424,20 @@ function M.edit_figure()
     return
   end
 
-  local selected = rofi_select(figures, "Edit figure")
-  if not selected then
-    return
-  end
+  ui_select(figures, "Edit figure", function(selected)
+    if not selected then
+      return
+    end
 
-  local ipe_path = fig_dir .. selected .. ".ipe"
-  if vim.fn.filereadable(ipe_path) == 0 then
-    vim.notify("File not found: " .. ipe_path, vim.log.levels.ERROR)
-    return
-  end
+    local ipe_path = fig_dir .. selected .. ".ipe"
+    if vim.fn.filereadable(ipe_path) == 0 then
+      vim.notify("File not found: " .. ipe_path, vim.log.levels.ERROR)
+      return
+    end
 
-  open_ipe(ipe_path)
-  ensure_watcher()
+    open_ipe(ipe_path)
+    ensure_watcher()
+  end)
 end
 
 function M.insert_figure()
@@ -480,13 +453,14 @@ function M.insert_figure()
     return
   end
 
-  local selected = rofi_select(figures, "Insert figure")
-  if not selected then
-    return
-  end
+  ui_select(figures, "Insert figure", function(selected)
+    if not selected then
+      return
+    end
 
-  local reldir = get_figures_reldir()
-  insert_at_cursor(string.format("\\incfig{%s/%s}{}", reldir, selected))
+    local reldir = get_figures_reldir()
+    insert_at_cursor(string.format("\\incfig{%s/%s}{}", reldir, selected))
+  end)
 end
 
 return M

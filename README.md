@@ -8,8 +8,12 @@ Create, edit, and insert IPE figures from within Neovim with a couple of keystro
 
 - **Neovim** >= 0.10
 - **IPE** drawing editor (`ipe` and `ipetoipe` must be on PATH)
-- **rofi** for figure name input and selection
-- **Hyprland** (optional, only required for floating IPE window)
+
+Figure name input and selection use Neovim's built-in `vim.ui.input`/`vim.ui.select`,
+so they pick up whatever UI provider you have configured (e.g.
+[dressing.nvim](https://github.com/stevearc/dressing.nvim),
+[telescope-ui-select](https://github.com/nvim-telescope/telescope-ui-select.nvim)),
+or fall back to Neovim's native prompts otherwise.
 
 ## Setup
 
@@ -23,18 +27,21 @@ Lazy.nvim:
       -- How to handle missing figures directory: "ask", "always", "never"
       dir_create_mode = "ask",
 
-      -- Extra flags passed to rofi (e.g. "-theme my-theme")
-      rofi_opts = "",
-
       -- Debounce interval for the file watcher (ms)
       debounce_ms = 100,
 
-      -- Open IPE in a floating window (requires Hyprland)
-      floating = false,
-
-      -- Floating window size in pixels (only used when floating = true)
-      float_width = 900,
-      float_height = 700,
+      -- Optional function(filepath) to launch IPE yourself, e.g. to open
+      -- it floating under a tiling WM. When nil, IPE is launched as a
+      -- plain detached job. Example for Hyprland:
+      --
+      -- launch_cmd = function(filepath)
+      --   local rules = "[float;size 900 700;center]"
+      --   vim.fn.jobstart(
+      --     { "hyprctl", "dispatch", "exec", rules, "--", "ipe", filepath },
+      --     { detach = true }
+      --   )
+      -- end,
+      launch_cmd = nil,
     })
   end,
 }
@@ -69,7 +76,7 @@ starter stylesheet is included at `templates/preamble.isy`.
 | Command | Description |
 |---|---|
 | `:AddFigure` | Prompt for a name, create `.ipe` file, insert `\incfig` at cursor, open IPE, start watcher |
-| `:EditFigure` | Pick an existing figure via rofi and open it in IPE |
+| `:EditFigure` | Pick an existing figure and open it in IPE |
 | `:InsertFigure` | Pick an existing figure and insert its `\incfig` at cursor |
 | `:StartWatcher` | Manually start the file watcher |
 | `:StopWatcher` | Stop the file watcher |
@@ -86,7 +93,7 @@ starter stylesheet is included at `templates/preamble.isy`.
 ## Workflow
 
 1. Open a `.tex` file and run `:AddFigure`.
-2. Rofi prompts for a name (e.g. "Free Body Diagram").
+2. Enter a name (e.g. "Free Body Diagram") at the prompt.
 3. The plugin creates `test_figures/free-body-diagram.ipe`, inserts
    `\incfig{test_figures/free-body-diagram}{}` at your cursor, and opens IPE.
 4. Draw your figure. Every save triggers a PDF export. With `latexmk -pvc`,
