@@ -85,7 +85,20 @@ function M.check()
   check_ask_always_never(config, "confirm_missing_library_package")
 
   if type(config.library_dir) == "string" and config.library_dir ~= "" then
-    vim.health.ok("library_dir = " .. config.library_dir)
+    local resolved = lextern_ipe.library_dir()
+    -- The path is baked into the .sty and used inside \includegraphics,
+    -- where these characters are all special to LaTeX.
+    local bad = resolved:match("[%s#%%~]")
+    if bad then
+      vim.health.error(
+        string.format("library_dir contains %s, which LaTeX can't use in a file path: %s", vim.inspect(bad), resolved),
+        { "Pick a library_dir without spaces, #, %, or ~ (after expansion)." }
+      )
+    elseif resolved ~= config.library_dir then
+      vim.health.ok("library_dir = " .. config.library_dir .. " (resolves to " .. resolved .. ")")
+    else
+      vim.health.ok("library_dir = " .. resolved)
+    end
   else
     vim.health.error("library_dir should be a non-empty string, got: " .. tostring(config.library_dir))
   end

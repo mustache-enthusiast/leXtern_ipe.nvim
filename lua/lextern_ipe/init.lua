@@ -107,6 +107,17 @@ local function package_dir()
   return vim.fn.stdpath("data") .. "/lextern_ipe"
 end
 
+--- config.library_dir as an absolute path without a trailing slash:
+--- ~ and $VARS expanded (vim.fn.isdirectory/mkdir don't expand ~, so
+--- a literal "~" directory would get created and baked into the .sty
+--- as an active character). Exposed as M.library_dir() for the health
+--- check.
+local function resolved_library_dir()
+  local dir = vim.fn.expand(M.config.library_dir or "")
+  return (dir:gsub("/+$", ""))
+end
+M.library_dir = resolved_library_dir
+
 --- (Re)generate <package_dir>/lextern-ipe.sty from
 --- templates/lextern-ipe.sty plus the current library_dir. Called from
 --- setup(), so the package stays in sync with config across restarts;
@@ -122,8 +133,7 @@ local function write_package_file()
   local content = f:read("*all")
   f:close()
 
-  local library_dir = (M.config.library_dir or ""):gsub("/+$", "")
-  content = content .. string.format("\\newcommand{\\incfiglibrary}{%s}\n", library_dir)
+  content = content .. string.format("\\newcommand{\\incfiglibrary}{%s}\n", resolved_library_dir())
 
   local dir = package_dir()
   if vim.fn.isdirectory(dir) == 0 and vim.fn.mkdir(dir, "p") == 0 then
@@ -216,10 +226,7 @@ end
 --- needed per dir_create_mode. Returns the path (with trailing slash)
 --- or nil + error message.
 local function get_library_dir()
-  local dir = M.config.library_dir
-  if dir:sub(-1) ~= "/" then
-    dir = dir .. "/"
-  end
+  local dir = resolved_library_dir() .. "/"
 
   local ok, err = ensure_dir(dir)
   if not ok then
@@ -254,10 +261,37 @@ local function has_command(cmd)
   return vim.fn.executable(cmd) == 1
 end
 
+--- Strip a LaTeX comment: everything from the first % that isn't
+--- escaped (preceded by an odd number of backslashes). Without this,
+--- a commented-out "% \usepackage{lextern-ipe}" or
+--- "% \newcommand{\incfig}..." satisfies the definition checks and
+--- the user gets a LaTeX error instead of a prompt.
+local function strip_comment(line)
+  local from = 1
+  while true do
+    local p = line:find("%", from, true)
+    if not p then
+      return line
+    end
+    local backslashes = 0
+    local j = p - 1
+    while j >= 1 and line:sub(j, j) == "\\" do
+      backslashes = backslashes + 1
+      j = j - 1
+    end
+    if backslashes % 2 == 0 then
+      return line:sub(1, p - 1)
+    end
+    from = p + 1
+  end
+end
+
 --- Whether a line looks like a definition of \incfig (as opposed to a
---- usage, e.g. \incfig{foo}{caption})
+--- usage, e.g. \incfig{foo}{caption}). Comments are ignored, and the
+--- name must end at a non-letter so \incfigwide etc. don't match.
 local function line_defines_incfig(line)
-  if not line:find("\\incfig", 1, true) then
+  line = strip_comment(line)
+  if not line:find("\\incfig%f[^%a]") then
     return false
   end
   return line:find("\\newcommand", 1, true) ~= nil
@@ -280,8 +314,10 @@ local function has_incfig_defined()
 end
 
 --- Extract the comma-separated argument names from a
---- "\command[options]{name1,name2}" invocation on a line
+--- "\command[options]{name1,name2}" invocation on a line (ignoring
+--- anything commented out)
 local function extract_arg_names(line, command)
+  line = strip_comment(line)
   local idx = line:find("\\" .. command, 1, true)
   if not idx then
     return {}
@@ -511,15 +547,16 @@ local function library_package_is_loaded()
   end)
 end
 
---- Find the 1-based line number of a line containing `pattern` in the
---- current buffer, or nil if there isn't one. want_last=true returns
---- the last match (for \usepackage, where anchoring after the latest
---- one reads naturally); false/omitted returns the first.
+--- Find the 1-based line number of a line containing `pattern`
+--- (outside comments) in the current buffer, or nil if there isn't
+--- one. want_last=true returns the last match (for \usepackage, where
+--- anchoring after the latest one reads naturally); false/omitted
+--- returns the first.
 local function find_line(pattern, want_last)
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
   local found = nil
   for i, line in ipairs(lines) do
-    if line:find(pattern, 1, true) then
+    if strip_comment(line):find(pattern, 1, true) then
       found = i
       if not want_last then
         return found
@@ -527,6 +564,31 @@ local function find_line(pattern, want_last)
     end
   end
   return found
+end
+
+--- Given the 1-based line where a \usepackage/\documentclass starts,
+--- return the line where its arguments end -- the same line usually,
+--- but a \usepackage[\n opt,\n]{pkg} spread over several lines would
+--- otherwise get the new line inserted inside its option bracket.
+--- Walks forward until brackets and braces balance; gives up (and
+--- returns `start`) after 50 lines so a stray brace can't send the
+--- insertion to the end of the document.
+local function end_of_command(start)
+  local lines = vim.api.nvim_buf_get_lines(0, start - 1, start - 1 + 50, false)
+  local depth = 0
+  for i, raw in ipairs(lines) do
+    for ch in strip_comment(raw):gmatch("[%[%]{}]") do
+      if ch == "[" or ch == "{" then
+        depth = depth + 1
+      else
+        depth = depth - 1
+      end
+    end
+    if depth <= 0 then
+      return start + i - 1
+    end
+  end
+  return start
 end
 
 --- Insert text at cursor position as new lines
@@ -560,6 +622,7 @@ local function insert_package_usepackage(at_cursor)
     return
   end
 
+  anchor = end_of_command(anchor)
   vim.api.nvim_buf_set_lines(0, anchor, anchor, false, { line })
 end
 
