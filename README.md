@@ -62,17 +62,17 @@ Lazy.nvim:
       -- \incfiglibrary) when it isn't loaded yet: "ask", "always", "never"
       confirm_missing_library_package = "ask",
 
-      -- Optional function(filepath) to launch IPE yourself, e.g. to open
-      -- it floating under a tiling WM. When nil, IPE is launched as a
-      -- plain detached job. Example for Hyprland:
-      --
-      -- launch_cmd = function(filepath)
-      --   local rules = "[float;size 900 700;center]"
-      --   vim.fn.jobstart(
-      --     { "hyprctl", "dispatch", "exec", rules, "--", "ipe", filepath },
-      --     { detach = true }
-      --   )
-      -- end,
+      -- Open Ipe as a floating, centered window (Hyprland only; see
+      -- "Floating Ipe window" below). Falls back to a normal launch, with
+      -- a warning, when not running under Hyprland.
+      floating = false,
+
+      -- Floating window size in pixels, { width, height }
+      float_size = { 800, 900 },
+
+      -- Optional function(filepath) to launch IPE yourself, for any other
+      -- compositor/WM. Takes precedence over `floating`. When nil, IPE is
+      -- launched as a plain detached job.
       launch_cmd = nil,
 
       -- Ipe stylesheets (.isy paths, ~ expanded) embedded into every new
@@ -86,6 +86,46 @@ Lazy.nvim:
 ```
 
 All config options are optional and the defaults are shown above.
+`:checkhealth lextern_ipe` warns about option names it doesn't recognize, so
+a typo or an option from an older version doesn't get silently ignored.
+
+### Floating Ipe window (Hyprland)
+
+With `floating = true`, Ipe opens as a centered floating window of
+`float_size` instead of tiling. Hyprland has been configured in Lua since
+0.55 and its `hyprctl eval` runs Lua inside the compositor, so the plugin
+does exactly what a `hyprland.lua` would:
+
+```lua
+hl.exec_cmd("ipe '/path/to/figure.ipe'", { float = true, size = "800 900", center = true })
+```
+
+The call and its rule keys come from Hyprland's own type stub
+(`/usr/share/hypr/stubs/hl.meta.lua`) and live in one place,
+`lua/lextern_ipe/hyprland.lua`, so a future Hyprland API change is a change
+there, not in every user's config. The legacy
+`hyprctl dispatch exec "[float;size 800 900;center] ipe ..."` string form is
+deliberately not used: it's hyprlang syntax, which Hyprland is dropping.
+Verified against Hyprland 0.56.2.
+
+If you'd rather the rule live in your Hyprland config, or want it for every
+Ipe window regardless of how it was started, a window rule does the same
+job and the plugin needs no `floating` at all:
+
+```lua
+-- ~/.config/hypr/hyprland.lua
+hl.window_rule({
+    name   = "ipe-float",
+    match  = { class = "ipe" },
+    float  = true,
+    size   = { 800, 900 },
+    center = true,
+})
+```
+
+On any other compositor, use `launch_cmd` and launch it however that
+compositor floats windows. `:checkhealth lextern_ipe` reports which launch
+mode is in effect and whether Hyprland is detected.
 
 ## LaTeX setup
 
@@ -274,3 +314,17 @@ figures separated per document and makes it easy to move a `.tex` file along
 with its figures. Figures meant to be shared across documents instead go in
 the [library](#figure-library) (`library_dir`), referenced by name via
 `\incfiglib` rather than by colocation.
+
+## Development
+
+```sh
+make test              # every tests/test_*.lua, each in its own headless Neovim
+make test T=watcher    # one file
+make test-live         # also the checks that open real windows (Hyprland)
+```
+
+Each test runs with isolated `XDG_*` directories and an empty working
+directory, so nothing touches your real config or `stdpath("data")`. Tests
+that need a tool that isn't installed (`ipetoipe`, `kpsewhich`, `pdflatex`)
+skip themselves. `tests/helpers.lua` documents the small `T` helper API; the
+module's `_internal` table exposes private functions to the tests only.

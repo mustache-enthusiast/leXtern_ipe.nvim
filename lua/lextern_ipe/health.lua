@@ -79,6 +79,26 @@ function M.check()
   end
   local config = lextern_ipe.config
 
+  -- Unknown option names are otherwise silently ignored, so a typo or
+  -- an option from an older version (e.g. float_width) does nothing
+  -- and nobody finds out.
+  local known = vim.deepcopy(lextern_ipe.defaults)
+  known.launch_cmd = true -- defaults to nil, so absent from `defaults`
+  local unknown = {}
+  for key in pairs(config) do
+    if known[key] == nil then
+      table.insert(unknown, key)
+    end
+  end
+  table.sort(unknown)
+  if #unknown > 0 then
+    vim.health.warn("unrecognized config option(s), ignored: " .. table.concat(unknown, ", "), {
+      "Check the option names against the README's setup() example.",
+    })
+  else
+    vim.health.ok("all config option names recognized")
+  end
+
   check_ask_always_never(config, "dir_create_mode")
   check_ask_always_never(config, "confirm_missing_preamble")
   check_ask_always_never(config, "confirm_duplicate_preamble")
@@ -119,12 +139,39 @@ function M.check()
     )
   end
 
-  if config.launch_cmd == nil then
-    vim.health.info("launch_cmd not set; IPE is launched as a plain detached job")
-  elseif type(config.launch_cmd) == "function" then
-    vim.health.ok("launch_cmd is set to a custom function")
-  else
+  if type(config.floating) ~= "boolean" then
+    vim.health.error("floating should be true or false, got: " .. tostring(config.floating))
+  end
+  local size = config.float_size
+  if type(size) ~= "table" or type(size[1]) ~= "number" or type(size[2]) ~= "number" or size[1] < 1 or size[2] < 1 then
+    vim.health.error("float_size should be { width, height } in pixels, got: " .. vim.inspect(size))
+  end
+
+  if config.launch_cmd ~= nil and type(config.launch_cmd) ~= "function" then
     vim.health.error("launch_cmd should be a function or nil, got: " .. type(config.launch_cmd))
+  elseif config.launch_cmd then
+    if config.floating then
+      vim.health.warn("both launch_cmd and floating=true are set; launch_cmd takes precedence")
+    else
+      vim.health.ok("launch_cmd is set to a custom function")
+    end
+  elseif config.floating then
+    local hyprland = require("lextern_ipe.hyprland")
+    if hyprland.is_available() then
+      -- `hyprctl eval` only ever prints "ok", so the version comes from
+      -- `hyprctl version` ("Hyprland 0.56.2 built from ...")
+      local version = vim.fn.system({ "hyprctl", "version" }):match("Hyprland%s+(%S+)") or "unknown version"
+      vim.health.ok(
+        string.format("floating=true: Ipe opens as a %dx%d centered floating window via hyprctl eval (Hyprland %s)",
+          size[1], size[2], version)
+      )
+    else
+      vim.health.warn("floating=true but Hyprland isn't detected (needs hyprctl on PATH and HYPRLAND_INSTANCE_SIGNATURE)", {
+        "Ipe will open normally. For other compositors, use launch_cmd instead.",
+      })
+    end
+  else
+    vim.health.info("floating=false and launch_cmd not set; IPE is launched as a plain detached job")
   end
 
   vim.health.start("lextern_ipe.nvim: library package")

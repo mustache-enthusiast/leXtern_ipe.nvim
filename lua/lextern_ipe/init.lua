@@ -65,9 +65,20 @@ M.config = {
   -- plugin.
   -- figures_dir_pattern = "%s_figures",
 
-  -- Optional function(filepath) to launch IPE yourself, e.g. to open it
-  -- floating under a tiling WM. Receives the absolute path to the .ipe
-  -- file. When nil, IPE is launched as a plain detached job.
+  -- Open Ipe as a floating, centered window. Hyprland only: it's done
+  -- by evaluating hl.exec_cmd(...) inside the compositor via
+  -- `hyprctl eval` (see lua/lextern_ipe/hyprland.lua). Falls back to a
+  -- normal launch, with a warning, when not running under Hyprland.
+  -- Ignored when launch_cmd is set.
+  floating = false,
+
+  -- Floating window size in pixels, { width, height }
+  float_size = { 800, 900 },
+
+  -- Optional function(filepath) to launch IPE yourself, for any other
+  -- compositor/WM. Receives the absolute path to the .ipe file and
+  -- takes precedence over `floating`. When nil, IPE is launched as a
+  -- plain detached job (or floating, per above).
   launch_cmd = nil,
 
   -- Ipe stylesheets (.isy files, paths; ~ is expanded) embedded into
@@ -83,6 +94,13 @@ M.config = {
   -- sheets (Ctrl+Shift+U).
   stylesheets = {},
 }
+
+--- Pristine copy of the defaults, taken before setup() merges user
+--- options into M.config. :checkhealth uses it to flag option names
+--- it doesn't recognize (a typo or a removed option is otherwise
+--- silently ignored). launch_cmd defaults to nil so it doesn't appear
+--- here; the health check special-cases it.
+M.defaults = vim.deepcopy(M.config)
 
 -- ============================================================
 -- Watcher state
@@ -785,10 +803,29 @@ local function open_ipe(filepath)
     return false
   end
 
+  local function plain_launch()
+    vim.fn.jobstart({ "ipe", filepath }, { detach = true })
+  end
+
   if M.config.launch_cmd then
     M.config.launch_cmd(filepath)
+  elseif M.config.floating then
+    local hyprland = require("lextern_ipe.hyprland")
+    if not hyprland.is_available() then
+      vim.notify(
+        "lextern_ipe: floating=true needs Hyprland (hyprctl + HYPRLAND_INSTANCE_SIGNATURE); opening Ipe normally."
+          .. " Use launch_cmd for other compositors.",
+        vim.log.levels.WARN
+      )
+      plain_launch()
+    else
+      hyprland.launch({ "ipe", filepath }, M.config.float_size, function(err)
+        vim.notify("lextern_ipe: floating launch failed (" .. err .. "); opening Ipe normally", vim.log.levels.WARN)
+        plain_launch()
+      end)
+    end
   else
-    vim.fn.jobstart({ "ipe", filepath }, { detach = true })
+    plain_launch()
   end
 
   return true
@@ -832,7 +869,9 @@ local function read_stylesheet(path)
   if not content:find("<ipestyle", 1, true) then
     return nil, "Not an Ipe stylesheet (no <ipestyle> element): " .. path
   end
-  return (content:gsub("%s*$", "\n"))
+  -- (not gsub("%s*$", "\n"): Lua's gsub also matches the empty string
+  -- at the very end after a non-empty match, doubling the newline)
+  return (content:gsub("%s+$", "")) .. "\n"
 end
 
 --- Copy the plugin template to create a new .ipe file, embedding
@@ -1282,5 +1321,24 @@ function M.define_incfig(at_cursor)
 
   insert_package_usepackage(at_cursor)
 end
+
+-- ============================================================
+-- Test hooks
+-- ============================================================
+
+--- Internals exposed for the test suite (tests/). Not a public API;
+--- anything here may change without notice.
+M._internal = {
+  strip_comment = strip_comment,
+  line_defines_incfig = line_defines_incfig,
+  extract_arg_names = extract_arg_names,
+  end_of_command = end_of_command,
+  incfig_is_defined = incfig_is_defined,
+  library_package_is_loaded = library_package_is_loaded,
+  sanitize_filename = sanitize_filename,
+  read_stylesheet = read_stylesheet,
+  insert_at_cursor = insert_at_cursor,
+  walk_kpsewhich_packages = walk_kpsewhich_packages,
+}
 
 return M
