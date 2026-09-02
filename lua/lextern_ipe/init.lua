@@ -67,6 +67,19 @@ M.config = {
   -- floating under a tiling WM. Receives the absolute path to the .ipe
   -- file. When nil, IPE is launched as a plain detached job.
   launch_cmd = nil,
+
+  -- Ipe stylesheets (.isy files, paths; ~ is expanded) embedded into
+  -- every *new* figure, after the "basic" sheet from
+  -- templates/template.ipe. This is how figures get the same
+  -- fonts/macros as your document: a sheet whose <preamble> holds your
+  -- \usepackage lines -- see templates/preamble.isy for a starter and
+  -- the README's "Figure stylesheets" section. Ipe only ever renders a
+  -- figure with the sheets embedded in its file (the IPESTYLES
+  -- environment variable is a *directory search list* for Ipe's own
+  -- dialogs, not a way to apply a sheet), so existing figures are
+  -- updated from inside Ipe: Edit > Style sheets, or Update style
+  -- sheets (Ctrl+Shift+U).
+  stylesheets = {},
 }
 
 -- ============================================================
@@ -667,7 +680,29 @@ local function export_to_pdf(ipe_path)
   return true
 end
 
---- Copy the plugin template to create a new .ipe file
+--- Read a .isy stylesheet for embedding into a figure: the
+--- <ipestyle>...</ipestyle> element with any leading XML declaration
+--- and DOCTYPE stripped (Ipe's own shipped sheets have them; they're
+--- only valid at the top of a standalone file, not nested inside an
+--- <ipe> document). Returns the XML text or nil + error message.
+local function read_stylesheet(path)
+  local f = io.open(path, "r")
+  if not f then
+    return nil, "Cannot read stylesheet: " .. path
+  end
+  local content = f:read("*all")
+  f:close()
+  content = content:gsub("^%s*<%?xml.-%?>%s*", "")
+  content = content:gsub("^%s*<!DOCTYPE.->%s*", "")
+  if not content:find("<ipestyle", 1, true) then
+    return nil, "Not an Ipe stylesheet (no <ipestyle> element): " .. path
+  end
+  return (content:gsub("%s*$", "\n"))
+end
+
+--- Copy the plugin template to create a new .ipe file, embedding
+--- config.stylesheets before the first <page> (Ipe cascades sheets
+--- in order, so they layer on top of the template's "basic" sheet).
 --- Returns true or nil + error message
 local function create_ipe_from_template(dest_path)
   local template = plugin_root() .. "/templates/template.ipe"
@@ -682,6 +717,26 @@ local function create_ipe_from_template(dest_path)
   end
   local content = f:read("*all")
   f:close()
+
+  -- Embed configured stylesheets. A missing/invalid sheet is an error
+  -- rather than silently skipped: the user asked for it, and a figure
+  -- created without it would render with the wrong fonts/macros.
+  local sheets = M.config.stylesheets or {}
+  if #sheets > 0 then
+    local page_at = content:find("<page>", 1, true)
+    if not page_at then
+      return nil, "Template has no <page> element: " .. template
+    end
+    local extra = {}
+    for _, sheet in ipairs(sheets) do
+      local xml, sheet_err = read_stylesheet(vim.fn.expand(sheet))
+      if not xml then
+        return nil, sheet_err
+      end
+      table.insert(extra, xml)
+    end
+    content = content:sub(1, page_at - 1) .. table.concat(extra) .. content:sub(page_at)
+  end
 
   -- Write to destination
   f = io.open(dest_path, "w")

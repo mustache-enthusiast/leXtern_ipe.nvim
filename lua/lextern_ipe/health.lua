@@ -143,17 +143,49 @@ function M.check()
     end
   end
 
-  vim.health.start("lextern_ipe.nvim: IPE stylesheet")
-  local ipestyles = vim.env.IPESTYLES
-  if not ipestyles then
+  vim.health.start("lextern_ipe.nvim: figure stylesheets")
+  local sheets = config.stylesheets
+  if type(sheets) ~= "table" then
+    vim.health.error("stylesheets should be a list of .isy paths, got: " .. type(sheets))
+  elseif #sheets == 0 then
     vim.health.info(
-      "IPESTYLES not set; figures will render with IPE's basic built-in stylesheet"
-        .. " (see templates/preamble.isy for a starter that matches your document fonts/macros)"
+      "stylesheets is empty; new figures get only Ipe's basic stylesheet"
+        .. " (see the README's \"Figure stylesheets\" section to give figures your document's fonts/macros)"
     )
-  elseif vim.fn.filereadable(ipestyles) == 1 then
-    vim.health.ok("IPESTYLES set and readable: " .. ipestyles)
   else
-    vim.health.warn("IPESTYLES is set but not readable: " .. ipestyles)
+    for _, sheet in ipairs(sheets) do
+      local path = vim.fn.expand(sheet)
+      if vim.fn.filereadable(path) == 0 then
+        vim.health.error("stylesheet not readable: " .. path)
+      else
+        local f = io.open(path, "r")
+        local head = f and f:read(4096) or ""
+        if f then
+          f:close()
+        end
+        if head:find("<ipestyle", 1, true) then
+          vim.health.ok("stylesheet found: " .. path)
+        else
+          vim.health.error("not an Ipe stylesheet (no <ipestyle> element): " .. path)
+        end
+      end
+    end
+  end
+
+  -- Ipe reads IPESTYLES as a colon-separated list of *directories*
+  -- that replaces its default style search path; pointing it at a
+  -- file (an old recommendation of this README) breaks Ipe's own
+  -- "basic" lookup for new documents and does nothing for figures.
+  local ipestyles = vim.env.IPESTYLES
+  if ipestyles then
+    for entry in ipestyles:gmatch("[^:]+") do
+      if entry ~= "_" and vim.fn.isdirectory(entry) == 0 then
+        vim.health.warn("IPESTYLES entry is not a directory: " .. entry, {
+          "Ipe treats IPESTYLES as a colon-separated list of style *directories*, not a stylesheet file.",
+          "To give figures a preamble, use the stylesheets config option instead (see README).",
+        })
+      end
+    end
   end
 end
 

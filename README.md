@@ -74,6 +74,12 @@ Lazy.nvim:
       --   )
       -- end,
       launch_cmd = nil,
+
+      -- Ipe stylesheets (.isy paths, ~ expanded) embedded into every new
+      -- figure, e.g. one whose <preamble> holds your \usepackage lines
+      -- so figure text matches your document (see "Figure stylesheets"
+      -- below). Only affects figures created after the change.
+      stylesheets = {},
     })
   end,
 }
@@ -137,10 +143,57 @@ plugin only ever checks whether it's defined, never how:
 Note this opts out of the [figure library](#figure-library), which needs
 `\incfiglibrary` from the generated package specifically.
 
-By default, IPE renders text in figures using its own basic preamble. If you
-need your figures to use the same fonts and macros as your document, point IPE
-to a custom stylesheet via `export IPESTYLES="path/to/stylesheet.isy"`. A
-starter stylesheet is included at `templates/preamble.isy`.
+## Figure stylesheets
+
+Ipe renders the text in a figure with pdflatex, using only the stylesheets
+embedded in that figure's `.ipe` file -- by default just Ipe's "basic" sheet,
+which has no preamble. If your figures need the same fonts and macros as your
+document (say `\mathbb`, `\bm`, a custom `\vec`), the fix is a stylesheet with
+a `<preamble>` element, embedded in each figure. A starter is included at
+`templates/preamble.isy`:
+
+```xml
+<ipestyle name="lextern-preamble">
+<preamble>
+\usepackage{amsmath,amssymb,amsthm}
+% Add your own packages and macros below:
+</preamble>
+</ipestyle>
+```
+
+**New figures.** Save the sheet somewhere stable -- `~/.ipe/styles/` is Ipe's
+own user style directory, which also lets Ipe find it by name later -- and
+list it in `setup()`:
+
+```lua
+stylesheets = { "~/.ipe/styles/lextern-preamble.isy" },
+```
+
+`:AddFigure` embeds every listed sheet into the figure right after the basic
+one (Ipe cascades sheets in order, so yours takes precedence). Any number of
+sheets works, including Ipe's own shipped ones from `/usr/share/ipe/*/styles/`.
+`:checkhealth lextern_ipe` verifies each listed file exists and is a
+stylesheet.
+
+**Existing figures.** Sheets are baked into the file at creation, so a figure
+made before you changed `stylesheets` (or the preamble in it) doesn't pick up
+the change. Update it from inside Ipe:
+
+- To add the sheet: *Edit > Style sheets*, *Add*, pick the `.isy` file, save.
+- To reload a sheet already embedded, after editing the file: *Edit > Update
+  style sheets* (`Ctrl+Shift+U`), then save. Ipe looks the sheet up *by name*
+  (`lextern-preamble.isy`) in the figure's own directory, then in
+  `~/.ipe/styles/`, which is why that location is recommended above.
+
+Saving in Ipe triggers the watcher's PDF export as usual.
+
+**About `IPESTYLES`.** Earlier versions of this README suggested pointing the
+`IPESTYLES` environment variable at a stylesheet file. That doesn't work: Ipe
+reads `IPESTYLES` as a colon-separated list of style *directories* that
+replaces its default search path (`~/.ipe/styles/` plus the system styles;
+use `_` for the latter), and even then it only affects *File > New* and the
+lookups above, never a figure opened from disk. If you have it set,
+`:checkhealth lextern_ipe` warns about entries that aren't directories.
 
 ## Figure library
 

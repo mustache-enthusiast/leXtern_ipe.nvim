@@ -2,15 +2,21 @@
 <!--
   leXtern_ipe.nvim preamble stylesheet
 
-  Add your LaTeX packages and macros here so that text rendered
-  inside IPE figures matches your main document. Set the IPESTYLES
-  environment variable to point to this file:
+  Add your LaTeX packages and macros to <preamble> so that text
+  rendered inside Ipe figures matches your main document. Ipe only
+  renders a figure with the stylesheets embedded in its .ipe file, so
+  this sheet has to be *in* each figure:
 
-    export IPESTYLES="$HOME/.config/ipe/lextern-preamble.isy"
+    New figures: copy this file somewhere stable (~/.ipe/styles/ is
+    Ipe's own user style directory) and list it in the plugin config:
 
-  Or pass it when launching IPE:
+      stylesheets = { "~/.ipe/styles/lextern-preamble.isy" },
 
-    ipe -sheet /path/to/lextern-preamble.isy figure.ipe
+    Existing figures: in Ipe, Edit > Style sheets > Add, pick the file,
+    save. After editing this file later, Edit > Update style sheets
+    (Ctrl+Shift+U) reloads it by name from ~/.ipe/styles/ and re-save.
+
+  See the README's "Figure stylesheets" section.
 -->
 <preamble>
 \usepackage{amsmath,amssymb,amsthm}
