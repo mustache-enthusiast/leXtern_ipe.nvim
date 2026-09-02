@@ -115,7 +115,7 @@ function M.check()
   end
 
   if config.launch_cmd == nil then
-    vim.health.ok("launch_cmd not set; IPE is launched as a plain detached job")
+    vim.health.info("launch_cmd not set; IPE is launched as a plain detached job")
   elseif type(config.launch_cmd) == "function" then
     vim.health.ok("launch_cmd is set to a custom function")
   else

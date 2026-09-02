@@ -344,6 +344,18 @@ local function find_last_usepackage_line()
   return last
 end
 
+--- Find the 1-based line number of the \documentclass line in the
+--- current buffer, or nil if there isn't one
+local function find_documentclass_line()
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  for i, line in ipairs(lines) do
+    if line:find("\\documentclass", 1, true) then
+      return i
+    end
+  end
+  return nil
+end
+
 --- Read a template file's contents, trimming a trailing newline
 --- Returns the content string, or nil + error message
 local function read_template(name)
@@ -704,8 +716,9 @@ function M.insert_figure()
 end
 
 --- Insert the \incfig preamble. By default it's placed right after the
---- last \usepackage line (falling back to cursor position if none is
---- found); pass at_cursor=true to always insert at the cursor instead.
+--- last \usepackage line, falling back to right after \documentclass if
+--- there's no \usepackage, and to cursor position if there's neither;
+--- pass at_cursor=true to always insert at the cursor instead.
 function M.define_incfig(at_cursor)
   if incfig_is_defined() then
     local mode = M.config.confirm_duplicate_preamble
@@ -734,9 +747,12 @@ function M.define_incfig(at_cursor)
     return
   end
 
-  local anchor = find_last_usepackage_line()
+  local anchor = find_last_usepackage_line() or find_documentclass_line()
   if not anchor then
-    vim.notify("No \\usepackage line found; inserting at cursor instead.", vim.log.levels.INFO)
+    vim.notify(
+      "No \\usepackage or \\documentclass line found; inserting at cursor instead.",
+      vim.log.levels.INFO
+    )
     insert_at_cursor(content)
     return
   end

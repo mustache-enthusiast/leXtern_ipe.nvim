@@ -72,8 +72,9 @@ All config options are optional and the defaults are shown above.
 
 The `\incfig` command needs to be defined in your document preamble (or a
 shared `.sty` file) before you can use it. Run `:DefineIncfig` to insert it
-right after the last `\usepackage` line (or `:DefineIncfig!` to insert at
-the cursor instead), or add it by hand:
+right after the last `\usepackage` line, falling back to right after
+`\documentclass` if there's no `\usepackage`, and to the cursor if there's
+neither (`:DefineIncfig!` always inserts at the cursor), or add it by hand:
 
 ```latex
 \usepackage{graphicx}
@@ -111,7 +112,7 @@ legitimate choice, not just a dismissal.
 | Command | Description |
 |---|---|
 | `:AddFigure` | Prompt for a name, create `.ipe` file, insert `\incfig` at cursor, open IPE, start watcher |
-| `:DefineIncfig` | Insert the `\incfig` macro after the last `\usepackage` line (`:DefineIncfig!` to insert at cursor instead) |
+| `:DefineIncfig` | Insert the `\incfig` macro after the last `\usepackage` line, or `\documentclass`/cursor as fallbacks (`:DefineIncfig!` to always insert at cursor) |
 | `:EditFigure` | Pick an existing figure and open it in IPE |
 | `:InsertFigure` | Pick an existing figure and insert its `\incfig` at cursor |
 | `:StartWatcher` | Manually start the file watcher |
