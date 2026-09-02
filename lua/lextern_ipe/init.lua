@@ -4,16 +4,10 @@ local M = {}
 -- Configuration
 -- ============================================================
 
-M.config = {
-  -- Directory creation behavior: "ask", "always", "never"
-  dir_create_mode = "ask",
-  -- Debounce interval for file watcher (ms)
-  debounce_ms = 100,
-  -- Optional function(filepath) to launch IPE yourself, e.g. to open it
-  -- floating under a tiling WM. Receives the absolute path to the .ipe
-  -- file. When nil, IPE is launched as a plain detached job.
-  launch_cmd = nil,
-}
+local defaults = require("lextern_ipe.config").defaults
+
+-- Applied even before setup() is called; see lua/lextern_ipe/config.lua
+M.config = defaults
 
 -- ============================================================
 -- Watcher state
@@ -31,7 +25,7 @@ M._watcher = {
 -- ============================================================
 
 function M.setup(opts)
-  M.config = vim.tbl_deep_extend("force", M.config, opts or {})
+  M.config = vim.tbl_deep_extend("force", defaults, opts or {})
 
   vim.api.nvim_create_autocmd("VimLeavePre", {
     callback = function()
@@ -200,15 +194,24 @@ local function extract_arg_names(line, command)
   return names
 end
 
---- Whether the file at path defines \incfig
-local function file_defines_incfig(path)
+--- Read a file into a list of lines, or nil if it can't be read
+local function read_file_lines(path)
   local f = io.open(path, "r")
   if not f then
-    return false
+    return nil
   end
   local content = f:read("*all")
   f:close()
+  local lines = {}
   for line in (content .. "\n"):gmatch("([^\n]*)\n") do
+    table.insert(lines, line)
+  end
+  return lines
+end
+
+--- Whether any line in a list defines \incfig
+local function lines_define_incfig(lines)
+  for _, line in ipairs(lines) do
     if line_defines_incfig(line) then
       return true
     end
@@ -216,34 +219,64 @@ local function file_defines_incfig(path)
   return false
 end
 
+--- Extract .cls/.sty candidate filenames referenced by \documentclass,
+--- \usepackage, and \RequirePackage across a list of lines
+local function package_filenames(lines)
+  local names = {}
+  for _, line in ipairs(lines) do
+    for _, name in ipairs(extract_arg_names(line, "documentclass")) do
+      table.insert(names, name .. ".cls")
+    end
+    for _, name in ipairs(extract_arg_names(line, "usepackage")) do
+      table.insert(names, name .. ".sty")
+    end
+    for _, name in ipairs(extract_arg_names(line, "RequirePackage")) do
+      table.insert(names, name .. ".sty")
+    end
+  end
+  return names
+end
+
 --- Check whether \incfig is defined by a \documentclass or \usepackage
---- the buffer loads, by resolving those names to files via kpsewhich
---- and scanning them directly (one level -- packages loaded *by* a
---- class/package aren't followed). Returns false if kpsewhich isn't
---- on PATH rather than erroring.
+--- the buffer loads, resolving names to files via kpsewhich and
+--- scanning them, following \RequirePackage/\usepackage indirection up
+--- to config.kpsewhich_depth levels deep (1 = only what the buffer
+--- names directly). Returns false if kpsewhich isn't on PATH, or
+--- kpsewhich_depth <= 0, rather than erroring.
 local function has_incfig_in_loaded_packages()
-  if not has_command("kpsewhich") then
+  local depth = M.config.kpsewhich_depth or 1
+  if depth <= 0 or not has_command("kpsewhich") then
     return false
   end
 
-  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-  local candidates = {}
-  for _, line in ipairs(lines) do
-    for _, name in ipairs(extract_arg_names(line, "documentclass")) do
-      table.insert(candidates, name .. ".cls")
-    end
-    for _, name in ipairs(extract_arg_names(line, "usepackage")) do
-      table.insert(candidates, name .. ".sty")
-    end
-  end
+  local visited = {}
+  local queue = package_filenames(vim.api.nvim_buf_get_lines(0, 0, -1, false))
 
-  for _, filename in ipairs(candidates) do
-    local output = vim.fn.system({ "kpsewhich", filename })
-    if vim.v.shell_error == 0 then
-      local path = vim.trim(output)
-      if path ~= "" and file_defines_incfig(path) then
-        return true
+  for level = 1, depth do
+    local next_queue = {}
+    for _, filename in ipairs(queue) do
+      if not visited[filename] then
+        visited[filename] = true
+        local output = vim.fn.system({ "kpsewhich", filename })
+        if vim.v.shell_error == 0 then
+          local path = vim.trim(output)
+          if path ~= "" then
+            local lines = read_file_lines(path)
+            if lines then
+              if lines_define_incfig(lines) then
+                return true
+              end
+              if level < depth then
+                vim.list_extend(next_queue, package_filenames(lines))
+              end
+            end
+          end
+        end
       end
+    end
+    queue = next_queue
+    if #queue == 0 then
+      break
     end
   end
 
@@ -295,11 +328,22 @@ end
 --- to be defined yet (checking the buffer and any resolvable loaded
 --- class/package). This is still a heuristic -- e.g. a package that
 --- itself requires another package defining \incfig won't be found --
---- so declining is a legitimate choice, not just a dismissal.
+--- so declining is a legitimate choice, not just a dismissal. Governed
+--- by config.confirm_missing_preamble ("ask"/"always"/"never").
 local function ensure_incfig_preamble()
   if incfig_is_defined() then
     return
   end
+
+  local mode = M.config.confirm_missing_preamble
+  if mode == "never" then
+    return
+  end
+  if mode == "always" then
+    M.define_incfig(false)
+    return
+  end
+
   local response = vim.fn.confirm(
     "\\incfig does not appear to be defined (checked buffer and loaded packages).\n\nInsert the preamble now?",
     "&Yes\n&No", 1
@@ -631,12 +675,18 @@ end
 --- found); pass at_cursor=true to always insert at the cursor instead.
 function M.define_incfig(at_cursor)
   if incfig_is_defined() then
-    local response = vim.fn.confirm(
-      "\\incfig already appears to be defined (buffer or loaded packages).\n\nInsert anyway?",
-      "&Yes\n&No", 2
-    )
-    if response ~= 1 then
+    local mode = M.config.confirm_duplicate_preamble
+    if mode == "never" then
       return
+    end
+    if mode ~= "always" then
+      local response = vim.fn.confirm(
+        "\\incfig already appears to be defined (buffer or loaded packages).\n\nInsert anyway?",
+        "&Yes\n&No", 2
+      )
+      if response ~= 1 then
+        return
+      end
     end
   end
 

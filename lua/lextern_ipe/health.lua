@@ -69,12 +69,31 @@ function M.check()
   end
   local config = lextern_ipe.config
 
-  local valid_dir_modes = { ask = true, always = true, never = true }
-  if valid_dir_modes[config.dir_create_mode] then
+  local ask_always_never = { ask = true, always = true, never = true }
+
+  if ask_always_never[config.dir_create_mode] then
     vim.health.ok("dir_create_mode = " .. config.dir_create_mode)
   else
     vim.health.error(
       "dir_create_mode is invalid: " .. tostring(config.dir_create_mode),
+      { 'Expected "ask", "always", or "never"' }
+    )
+  end
+
+  if ask_always_never[config.confirm_missing_preamble] then
+    vim.health.ok("confirm_missing_preamble = " .. config.confirm_missing_preamble)
+  else
+    vim.health.error(
+      "confirm_missing_preamble is invalid: " .. tostring(config.confirm_missing_preamble),
+      { 'Expected "ask", "always", or "never"' }
+    )
+  end
+
+  if ask_always_never[config.confirm_duplicate_preamble] then
+    vim.health.ok("confirm_duplicate_preamble = " .. config.confirm_duplicate_preamble)
+  else
+    vim.health.error(
+      "confirm_duplicate_preamble is invalid: " .. tostring(config.confirm_duplicate_preamble),
       { 'Expected "ask", "always", or "never"' }
     )
   end
@@ -84,6 +103,14 @@ function M.check()
   else
     vim.health.error(
       "debounce_ms should be a non-negative number, got: " .. tostring(config.debounce_ms)
+    )
+  end
+
+  if type(config.kpsewhich_depth) == "number" and config.kpsewhich_depth >= 0 then
+    vim.health.ok(string.format("kpsewhich_depth = %d", config.kpsewhich_depth))
+  else
+    vim.health.error(
+      "kpsewhich_depth should be a non-negative number, got: " .. tostring(config.kpsewhich_depth)
     )
   end
 
