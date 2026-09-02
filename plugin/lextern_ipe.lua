@@ -19,9 +19,13 @@ local function parse_flags(name, fargs, recognized)
   return result
 end
 
+--- Completion function offering `flags` that start with what's been
+--- typed so far (Neovim doesn't filter Lua completion results itself)
 local function flag_complete(flags)
-  return function()
-    return flags
+  return function(arglead)
+    return vim.tbl_filter(function(flag)
+      return flag:sub(1, #arglead) == arglead
+    end, flags)
   end
 end
 

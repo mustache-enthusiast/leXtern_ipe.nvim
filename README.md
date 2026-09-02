@@ -255,13 +255,16 @@ existed, which reference `\incfig{\incfiglibrary/name}{}`, keep compiling.)
 
 ## Workflow
 
-1. Open a `.tex` file and run `:AddFigure`.
+1. Open a `.tex` file, say `test.tex`, and run `:AddFigure`.
 2. Enter a name (e.g. "Free Body Diagram") at the prompt.
 3. The plugin creates `test_figures/free-body-diagram.ipe`, inserts
-   `\incfig{test_figures/free-body-diagram}{}` at your cursor, and opens IPE.
+   `\incfig{test_figures/free-body-diagram}{}` at your cursor, exports an
+   empty `free-body-diagram.pdf` so the document already compiles, and
+   opens IPE.
 4. Draw your figure. Every save triggers a PDF export. With `latexmk -pvc`,
    your document recompiles automatically.
-5. Fill in the caption in the second `\incfig` argument.
+5. Fill in the caption: the cursor is left on the closing brace of the
+   second `\incfig` argument, so `i` types straight into it.
 
 ## File organization
 

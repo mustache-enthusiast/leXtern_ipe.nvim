@@ -41,20 +41,21 @@ M.config = {
   -- definition when one is already found: "ask", "always", "never"
   confirm_duplicate_preamble = "ask",
 
-  -- Absolute path to the shared figure library, separate from each
-  -- document's own <basename>_figures dir. Created on first use, per
-  -- dir_create_mode. Used by :AddFigure!/:EditFigure!/:InsertFigure!.
-  -- Baked into the generated lextern-ipe.sty package as \incfiglibrary
-  -- (see PACKAGE_NAME below) -- changing this only takes effect for
-  -- documents after the next :setup()/Neovim restart regenerates the
+  -- Path to the shared figure library (~ and $VARS expanded; avoid
+  -- spaces, #, % -- it's used inside \includegraphics), separate from
+  -- each document's own <basename>_figures dir. Created on first use,
+  -- per dir_create_mode. Used by :AddFigure/:EditFigure/:InsertFigure
+  -- with --lib. Baked into the generated lextern-ipe.sty package as
+  -- \incfiglibrary (see PACKAGE_NAME above) -- changing this only takes
+  -- effect after the next setup()/Neovim restart regenerates the
   -- package; already-\usepackage{lextern-ipe}'d documents pick it up
   -- automatically at their next compile, no per-document edits needed.
   library_dir = vim.fn.stdpath("data") .. "/lextern_ipe/library",
 
-  -- Whether :AddFigure!/:InsertFigure! prompt before auto-inserting
-  -- \usepackage{lextern-ipe} (which provides \incfiglibrary) when it
-  -- can't find the package loaded in the buffer: "ask" (default),
-  -- "always", "never"
+  -- Whether :AddFigure --lib/:InsertFigure --lib prompt before
+  -- auto-inserting \usepackage{lextern-ipe} (which provides \incfiglib)
+  -- when it can't find the package loaded in the buffer or its
+  -- packages: "ask" (default), "always", "never"
   confirm_missing_library_package = "ask",
 
   -- Reserved for future use: customizing where/how the figures
@@ -1198,6 +1199,10 @@ function M.create_figure(use_library)
 
     open_ipe(ipe_path)
     ensure_watcher(dir)
+    -- Export the (empty) figure right away so the document compiles
+    -- immediately -- the \incfig line is already in the buffer, and
+    -- the watcher only sees saves from here on.
+    run_export(dir, filename .. ".ipe")
 
     vim.notify("Created: " .. filename .. ".ipe", vim.log.levels.INFO)
   end)

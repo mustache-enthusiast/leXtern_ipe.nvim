@@ -152,6 +152,8 @@ function M.check()
       vim.health.warn("\\usepackage{lextern-ipe} will not be found by LaTeX -- TEXINPUTS isn't set up", {
         "Add this directory to TEXINPUTS in your shell profile:",
         'export TEXINPUTS="' .. vim.fn.stdpath("data") .. '/lextern_ipe//:$TEXINPUTS"',
+        "(This checks Neovim's own environment. If you start Neovim from a desktop launcher"
+          .. " rather than a shell, it may not see your profile even though latexmk in a terminal does.)",
       })
     end
   end
