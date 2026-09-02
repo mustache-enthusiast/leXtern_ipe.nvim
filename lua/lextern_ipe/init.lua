@@ -19,12 +19,16 @@ M.config = {
   debounce_ms = 100,
 
   -- How many levels of \RequirePackage/\usepackage indirection to follow
-  -- when resolving whether \incfig is defined by a loaded class/package
-  -- via kpsewhich. 1 = only check \documentclass/\usepackage named
-  -- directly in the buffer (not what those in turn require). 0 disables
-  -- package resolution entirely, falling back to a buffer-text-only
-  -- check. See :checkhealth lextern_ipe if kpsewhich isn't found.
-  kpsewhich_depth = 1,
+  -- when resolving whether \incfig (or \usepackage{lextern-ipe}
+  -- specifically) is defined by a loaded class/package via kpsewhich.
+  -- 1 = only check \documentclass/\usepackage named directly in the
+  -- buffer (not what those in turn require). Default 2 so that
+  -- \RequirePackage{lextern-ipe} inside a custom \documentclass is
+  -- found out of the box (buffer -> class = 1 hop, class -> package =
+  -- 2nd hop). 0 disables package resolution entirely, falling back to
+  -- a buffer-text-only check. See :checkhealth lextern_ipe if
+  -- kpsewhich isn't found.
+  kpsewhich_depth = 2,
 
   -- Whether :AddFigure/:InsertFigure prompt before auto-inserting the
   -- \incfig preamble when it can't find a definition:
@@ -330,37 +334,48 @@ local function package_filenames(lines)
   return names
 end
 
---- Check whether \incfig is defined by a \documentclass or \usepackage
---- the buffer loads, resolving names to files via kpsewhich and
---- scanning them, following \RequirePackage/\usepackage indirection up
---- to config.kpsewhich_depth levels deep (1 = only what the buffer
---- names directly). Returns false if kpsewhich isn't on PATH, or
---- kpsewhich_depth <= 0, rather than erroring.
-local function has_incfig_in_loaded_packages()
+--- Breadth-first walk of \documentclass/\usepackage/\RequirePackage
+--- names starting from `lines`, resolving each via kpsewhich, up to
+--- config.kpsewhich_depth levels of further indirection (1 = only what
+--- `lines` names directly; each additional level follows one more hop
+--- of \RequirePackage/\usepackage inside whatever was just resolved).
+--- Calls predicate(stem, file_lines) for every candidate encountered --
+--- stem is the filename without its .cls/.sty extension, checked
+--- *before* resolving the file (so a predicate that only needs the
+--- name, like matching this plugin's own package, doesn't cost a
+--- kpsewhich round-trip); file_lines is the resolved file's content on
+--- the second call, or nil if it couldn't be resolved/read. Stops and
+--- returns true as soon as predicate matches; false if kpsewhich isn't
+--- on PATH, kpsewhich_depth <= 0, or nothing matched.
+local function walk_kpsewhich_packages(lines, predicate)
   local depth = M.config.kpsewhich_depth or 1
   if depth <= 0 or not has_command("kpsewhich") then
     return false
   end
 
   local visited = {}
-  local queue = package_filenames(vim.api.nvim_buf_get_lines(0, 0, -1, false))
+  local queue = package_filenames(lines)
 
   for level = 1, depth do
     local next_queue = {}
     for _, filename in ipairs(queue) do
       if not visited[filename] then
         visited[filename] = true
+        local stem = filename:gsub("%.[^.]*$", "")
+        if predicate(stem, nil) then
+          return true
+        end
         local output = vim.fn.system({ "kpsewhich", filename })
         if vim.v.shell_error == 0 then
           local path = vim.trim(output)
           if path ~= "" then
-            local lines = read_file_lines(path)
-            if lines then
-              if lines_define_incfig(lines) then
+            local file_lines = read_file_lines(path)
+            if file_lines then
+              if predicate(stem, file_lines) then
                 return true
               end
               if level < depth then
-                vim.list_extend(next_queue, package_filenames(lines))
+                vim.list_extend(next_queue, package_filenames(file_lines))
               end
             end
           end
@@ -376,9 +391,27 @@ local function has_incfig_in_loaded_packages()
   return false
 end
 
+--- Check whether \incfig is defined by a \documentclass or \usepackage
+--- the buffer loads (directly, or transitively through
+--- \RequirePackage/\usepackage indirection -- see
+--- walk_kpsewhich_packages). Recognizes this plugin's own package by
+--- name without needing to read it (we already know what it provides).
+local function has_incfig_in_loaded_packages()
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  return walk_kpsewhich_packages(lines, function(stem, file_lines)
+    if stem == PACKAGE_NAME then
+      return true
+    end
+    return file_lines ~= nil and lines_define_incfig(file_lines)
+  end)
+end
+
 --- Check whether the current buffer loads this plugin's generated
 --- lextern-ipe.sty (\usepackage{lextern-ipe}), which provides both
---- \incfig (as a fallback) and \incfiglibrary.
+--- \incfig (as a fallback) and \incfiglibrary. Buffer-text only, no
+--- kpsewhich -- a fast path for the common case (this plugin inserted
+--- \usepackage{lextern-ipe} directly into the buffer) that also works
+--- without kpsewhich installed.
 local function has_lextern_ipe_package_loaded()
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
   for _, line in ipairs(lines) do
@@ -392,17 +425,37 @@ local function has_lextern_ipe_package_loaded()
 end
 
 --- Check whether \incfig is defined, in the buffer, in a loaded
---- class/package, or via this plugin's own lextern-ipe.sty. Caches a
---- positive result on the buffer so repeated calls (e.g. across
---- several :AddFigure invocations) don't re-shell out to kpsewhich
---- every time.
+--- class/package, or via this plugin's own lextern-ipe.sty (loaded
+--- directly, or indirectly -- e.g. \RequirePackage{lextern-ipe} inside
+--- a custom class file). Caches a positive result on the buffer so
+--- repeated calls (e.g. across several :AddFigure invocations) don't
+--- re-shell out to kpsewhich every time.
 local function incfig_is_defined()
   if vim.b.lextern_ipe_incfig_defined then
     return true
   end
-  local found = has_incfig_defined() or has_incfig_in_loaded_packages() or has_lextern_ipe_package_loaded()
+  local found = has_incfig_defined() or has_lextern_ipe_package_loaded() or has_incfig_in_loaded_packages()
   if found then
     vim.b.lextern_ipe_incfig_defined = true
+  end
+  return found
+end
+
+--- Check whether lextern-ipe.sty (and so \incfiglibrary) is loaded, in
+--- the buffer directly or transitively (e.g. via a custom class file's
+--- own \RequirePackage{lextern-ipe}). Caches a positive result on the
+--- buffer.
+local function library_package_is_loaded()
+  if vim.b.lextern_ipe_library_package_loaded then
+    return true
+  end
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local found = has_lextern_ipe_package_loaded()
+    or walk_kpsewhich_packages(lines, function(stem)
+      return stem == PACKAGE_NAME
+    end)
+  if found then
+    vim.b.lextern_ipe_library_package_loaded = true
   end
   return found
 end
@@ -498,7 +551,7 @@ end
 --- ensure_incfig_preamble's. Governed by
 --- config.confirm_missing_library_package ("ask"/"always"/"never").
 local function ensure_library_package()
-  if has_lextern_ipe_package_loaded() then
+  if library_package_is_loaded() then
     return
   end
 

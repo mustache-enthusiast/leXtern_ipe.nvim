@@ -37,10 +37,12 @@ Lazy.nvim:
       debounce_ms = 100,
 
       -- How many levels of \RequirePackage/\usepackage indirection to
-      -- follow when resolving whether \incfig is defined by a loaded
-      -- class/package via kpsewhich. 0 disables package resolution,
-      -- falling back to a buffer-text-only check.
-      kpsewhich_depth = 1,
+      -- follow when resolving whether \incfig (or \usepackage{lextern-ipe}
+      -- specifically) is defined by a loaded class/package via
+      -- kpsewhich. Default 2 so \RequirePackage{lextern-ipe} inside a
+      -- custom \documentclass is found out of the box. 0 disables
+      -- package resolution, falling back to a buffer-text-only check.
+      kpsewhich_depth = 2,
 
       -- Whether :AddFigure/:InsertFigure prompt before auto-inserting a
       -- missing \incfig preamble: "ask", "always", "never"
@@ -108,9 +110,12 @@ there's no `\usepackage`, and to the cursor if there's neither
 defined -- covering `\usepackage{lextern-ipe}`, plain buffer text, *and*
 (via `kpsewhich`, part of any TeX distribution) a `\documentclass`/
 `\usepackage` you already load, up to `kpsewhich_depth` levels of
-`\RequirePackage`/`\usepackage` indirection (default `1`; raise it if your
-`\incfig` is defined further down a require chain). It's still a heuristic,
-so declining the prompt remains a legitimate choice, not just a dismissal.
+`\RequirePackage`/`\usepackage` indirection (default `2` -- covers e.g. a
+custom `\documentclass` that itself does `\RequirePackage{lextern-ipe}`;
+raise it if your `\incfig` is defined further down a require chain). The
+same resolution applies to `\incfiglibrary`/`:AddFigure!` specifically, not
+just `\incfig` in general. It's still a heuristic, so declining the prompt
+remains a legitimate choice, not just a dismissal.
 
 If you'd rather not depend on `TEXINPUTS` at all, you can skip
 `\usepackage{lextern-ipe}` and define `\incfig` yourself instead -- the
