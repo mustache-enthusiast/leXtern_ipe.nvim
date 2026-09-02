@@ -9,6 +9,10 @@ cmd("AddFigure", function()
   require("lextern_ipe").create_figure()
 end)
 
+cmd("AddPreamble", function()
+  require("lextern_ipe").add_preamble()
+end)
+
 cmd("EditFigure", function()
   require("lextern_ipe").edit_figure()
 end)

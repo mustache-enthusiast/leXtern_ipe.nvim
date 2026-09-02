@@ -1,0 +1,10 @@
+\usepackage{graphicx}
+
+\newcommand{\incfig}[2]{%
+    \begin{figure}[htbp]
+        \centering
+        \includegraphics[width=0.8\linewidth]{#1.pdf}
+        \caption{#2}
+        \label{fig:#1}
+    \end{figure}
+}

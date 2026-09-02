@@ -150,6 +150,30 @@ local function has_command(cmd)
   return vim.fn.executable(cmd) == 1
 end
 
+--- Check whether the current buffer already defines \incfig
+local function has_incfig_defined()
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  for _, line in ipairs(lines) do
+    if line:find("\\newcommand", 1, true) and line:find("\\incfig", 1, true) then
+      return true
+    end
+  end
+  return false
+end
+
+--- Read a template file's contents, trimming a trailing newline
+--- Returns the content string, or nil + error message
+local function read_template(name)
+  local path = plugin_root() .. "/templates/" .. name
+  local f = io.open(path, "r")
+  if not f then
+    return nil, "Template not found: " .. path
+  end
+  local content = f:read("*all")
+  f:close()
+  return (content:gsub("\n+$", ""))
+end
+
 -- ============================================================
 -- User prompts
 -- ============================================================
@@ -461,6 +485,26 @@ function M.insert_figure()
     local reldir = get_figures_reldir()
     insert_at_cursor(string.format("\\incfig{%s/%s}{}", reldir, selected))
   end)
+end
+
+function M.add_preamble()
+  if has_incfig_defined() then
+    local response = vim.fn.confirm(
+      "\\incfig already appears to be defined in this buffer.\n\nInsert anyway?",
+      "&Yes\n&No", 2
+    )
+    if response ~= 1 then
+      return
+    end
+  end
+
+  local content, err = read_template("incfig.tex")
+  if not content then
+    vim.notify(err, vim.log.levels.ERROR)
+    return
+  end
+
+  insert_at_cursor(content)
 end
 
 return M

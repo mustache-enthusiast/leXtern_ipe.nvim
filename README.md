@@ -51,7 +51,9 @@ All config options are optional and the defaults are shown above.
 
 ## LaTeX setup
 
-Add the `\incfig` command to your document preamble (or a shared `.sty` file):
+The `\incfig` command needs to be defined in your document preamble (or a
+shared `.sty` file) before you can use it. Run `:AddPreamble` with your
+cursor at the target location to insert it, or add it by hand:
 
 ```latex
 \usepackage{graphicx}
@@ -76,6 +78,7 @@ starter stylesheet is included at `templates/preamble.isy`.
 | Command | Description |
 |---|---|
 | `:AddFigure` | Prompt for a name, create `.ipe` file, insert `\incfig` at cursor, open IPE, start watcher |
+| `:AddPreamble` | Insert the `\incfig` macro definition at cursor |
 | `:EditFigure` | Pick an existing figure and open it in IPE |
 | `:InsertFigure` | Pick an existing figure and insert its `\incfig` at cursor |
 | `:StartWatcher` | Manually start the file watcher |
