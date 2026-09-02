@@ -28,35 +28,45 @@ Lazy.nvim:
   "mustache-enthusiast/leXtern_ipe.nvim",
   ft = "tex",
   config = function()
-    require("lextern_ipe").setup()
+    require("lextern_ipe").setup({
+      -- How to handle a missing figures directory: "ask", "always", "never"
+      dir_create_mode = "ask",
+
+      -- Debounce interval for the file watcher (ms)
+      debounce_ms = 100,
+
+      -- How many levels of \RequirePackage/\usepackage indirection to
+      -- follow when resolving whether \incfig is defined by a loaded
+      -- class/package via kpsewhich. 0 disables package resolution,
+      -- falling back to a buffer-text-only check.
+      kpsewhich_depth = 1,
+
+      -- Whether :AddFigure/:InsertFigure prompt before auto-inserting a
+      -- missing \incfig preamble: "ask", "always", "never"
+      confirm_missing_preamble = "ask",
+
+      -- Whether :DefineIncfig prompts before inserting a second \incfig
+      -- definition when one is already found: "ask", "always", "never"
+      confirm_duplicate_preamble = "ask",
+
+      -- Optional function(filepath) to launch IPE yourself, e.g. to open
+      -- it floating under a tiling WM. When nil, IPE is launched as a
+      -- plain detached job. Example for Hyprland:
+      --
+      -- launch_cmd = function(filepath)
+      --   local rules = "[float;size 900 700;center]"
+      --   vim.fn.jobstart(
+      --     { "hyprctl", "dispatch", "exec", rules, "--", "ipe", filepath },
+      --     { detach = true }
+      --   )
+      -- end,
+      launch_cmd = nil,
+    })
   end,
 }
 ```
 
-Config lives entirely in [`lua/lextern_ipe/config.lua`](lua/lextern_ipe/config.lua)
-rather than as `setup()` opts — since this is currently a single-user,
-single-machine plugin, that file doubles as an actual personal config, not
-just a schema of generic defaults. It's applied even without calling
-`setup()`; `setup(opts)` merges anything you pass on top of it. Edit that
-file directly rather than passing opts, unless you want a one-off override.
-
-Options currently in there:
-
-| Option | Default | Description |
-|---|---|---|
-| `dir_create_mode` | `"ask"` | Whether to create a missing figures directory: `"ask"`, `"always"`, `"never"` |
-| `debounce_ms` | `100` | Debounce interval for the file watcher (ms) |
-| `kpsewhich_depth` | `1` | How many levels of `\RequirePackage`/`\usepackage` indirection to follow when resolving whether `\incfig` is defined by a loaded class/package (`0` disables package resolution, falling back to buffer-text-only) |
-| `confirm_missing_preamble` | `"ask"` | Whether `:AddFigure`/`:InsertFigure` prompt before auto-inserting a missing `\incfig` preamble: `"ask"`, `"always"`, `"never"` |
-| `confirm_duplicate_preamble` | `"ask"` | Whether `:DefineIncfig` prompts before inserting a second `\incfig` definition: `"ask"`, `"always"`, `"never"` |
-| `launch_cmd` | Hyprland floating (see file) | Optional `function(filepath)` to launch IPE yourself. `nil` launches it as a plain detached job. |
-
-`lua/lextern_ipe/config.lua` also has a placeholder for future directory-
-naming customization (`figures_dir_pattern`, currently unused/commented
-out — the `<basename>_figures` convention is hardcoded for now), and,
-while `launch_cmd` testing is in progress, a second, intentionally broken
-`launch_cmd` block commented out beneath the active one — flagged there
-for removal once that testing pass is done.
+All config options are optional and the defaults are shown above.
 
 ## LaTeX setup
 

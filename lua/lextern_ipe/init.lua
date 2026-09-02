@@ -4,10 +4,43 @@ local M = {}
 -- Configuration
 -- ============================================================
 
-local defaults = require("lextern_ipe.config").defaults
+M.config = {
+  -- Directory creation behavior: "ask", "always", "never"
+  dir_create_mode = "ask",
 
--- Applied even before setup() is called; see lua/lextern_ipe/config.lua
-M.config = defaults
+  -- Debounce interval for file watcher (ms)
+  debounce_ms = 100,
+
+  -- How many levels of \RequirePackage/\usepackage indirection to follow
+  -- when resolving whether \incfig is defined by a loaded class/package
+  -- via kpsewhich. 1 = only check \documentclass/\usepackage named
+  -- directly in the buffer (not what those in turn require). 0 disables
+  -- package resolution entirely, falling back to a buffer-text-only
+  -- check. See :checkhealth lextern_ipe if kpsewhich isn't found.
+  kpsewhich_depth = 1,
+
+  -- Whether :AddFigure/:InsertFigure prompt before auto-inserting the
+  -- \incfig preamble when it can't find a definition:
+  -- "ask" (prompt every time, default), "always" (insert without
+  -- asking), "never" (skip silently -- no prompt, no insert)
+  confirm_missing_preamble = "ask",
+
+  -- Whether :DefineIncfig prompts before inserting a second \incfig
+  -- definition when one is already found: "ask", "always", "never"
+  confirm_duplicate_preamble = "ask",
+
+  -- Reserved for future use: customizing where/how the figures
+  -- directory is named and located, instead of the fixed
+  -- "<basename>_figures" convention currently hardcoded in
+  -- get_figures_dir()/get_figures_reldir(). Not yet consumed by the
+  -- plugin.
+  -- figures_dir_pattern = "%s_figures",
+
+  -- Optional function(filepath) to launch IPE yourself, e.g. to open it
+  -- floating under a tiling WM. Receives the absolute path to the .ipe
+  -- file. When nil, IPE is launched as a plain detached job.
+  launch_cmd = nil,
+}
 
 -- ============================================================
 -- Watcher state
@@ -25,7 +58,7 @@ M._watcher = {
 -- ============================================================
 
 function M.setup(opts)
-  M.config = vim.tbl_deep_extend("force", defaults, opts or {})
+  M.config = vim.tbl_deep_extend("force", M.config, opts or {})
 
   vim.api.nvim_create_autocmd("VimLeavePre", {
     callback = function()
