@@ -86,7 +86,13 @@ M.config = {
 -- Watcher state
 -- ============================================================
 
---- directory -> { handle = <uv fs_event>, last_export = { [filename] = ms } }
+--- directory (with trailing slash) -> {
+---   handle  = <uv fs_event>,
+---   timers  = { [filename] = <uv timer> }  -- armed debounce timers
+---   busy    = { [filename] = true }        -- export in flight
+---   pending = { [filename] = true }        -- save landed while busy
+---   exports = <completed export count>
+--- }
 M._watchers = {}
 
 -- ============================================================
@@ -730,17 +736,25 @@ local function open_ipe(filepath)
   return true
 end
 
---- Export an .ipe file to PDF using ipetoipe
---- Returns true or nil + error message
-local function export_to_pdf(ipe_path)
+--- Export an .ipe file to PDF using ipetoipe, asynchronously -- it
+--- runs pdflatex for any figure containing text, which froze the
+--- editor for a second or more per save when this was synchronous.
+--- Calls callback(true) or callback(nil, err) on the main loop.
+local function export_to_pdf(ipe_path, callback)
   if not has_command("ipetoipe") then
-    return nil, "ipetoipe is not installed"
+    callback(nil, "ipetoipe is not installed")
+    return
   end
-  local output = vim.fn.system(string.format('ipetoipe -pdf "%s"', ipe_path))
-  if vim.v.shell_error ~= 0 then
-    return nil, "ipetoipe failed: " .. output
-  end
-  return true
+  vim.system({ "ipetoipe", "-pdf", ipe_path }, { text = true }, function(result)
+    vim.schedule(function()
+      if result.code == 0 then
+        callback(true)
+        return
+      end
+      local detail = vim.trim((result.stderr ~= "" and result.stderr) or result.stdout or "")
+      callback(nil, string.format("ipetoipe failed (exit %d): %s", result.code, detail))
+    end)
+  end)
 end
 
 --- Read a .isy stylesheet for embedding into a figure: the
@@ -816,16 +830,50 @@ end
 -- File watcher
 -- ============================================================
 
---- Build the fs-event callback for one watched directory. Each
---- watcher gets its own closure so on_fs_change knows which directory
---- (and which watcher's debounce state) it belongs to.
-local function on_fs_change(directory)
-  return function(err, filename, events)
-    if err or not filename then
-      return
-    end
+--- Run (or queue) the export of one file in a watched directory,
+--- serialized per file: if a save lands while its export is still in
+--- flight, one more export runs after it finishes rather than two
+--- ipetoipe processes racing to write the same PDF.
+local function run_export(directory, filename)
+  local watcher = M._watchers[directory]
+  if not watcher then
+    return
+  end
+  if watcher.busy[filename] then
+    watcher.pending[filename] = true
+    return
+  end
 
-    if not filename:match("%.ipe$") then
+  local ipe_path = directory .. filename
+  if vim.fn.filereadable(ipe_path) == 0 then
+    return -- deleted or renamed away between the event and now
+  end
+
+  watcher.busy[filename] = true
+  export_to_pdf(ipe_path, function(ok, err)
+    watcher.busy[filename] = nil
+    if ok then
+      watcher.exports = watcher.exports + 1
+      local pdf_name = filename:gsub("%.ipe$", ".pdf")
+      vim.api.nvim_echo({ { pdf_name .. " ✓", "MoreMsg" } }, false, {})
+    else
+      vim.notify("Export failed: " .. filename .. "\n" .. (err or ""), vim.log.levels.ERROR)
+    end
+    if watcher.pending[filename] then
+      watcher.pending[filename] = nil
+      run_export(directory, filename)
+    end
+  end)
+end
+
+--- Build the fs-event callback for one watched directory. Saves are
+--- debounced on the trailing edge: every event (re)arms a per-file
+--- timer and the export runs debounce_ms after the *last* one, so a
+--- save Ipe writes in several steps is exported once, complete,
+--- instead of on the first partial write.
+local function on_fs_change(directory)
+  return function(err, filename)
+    if err or not filename or not filename:match("%.ipe$") then
       return
     end
 
@@ -834,24 +882,21 @@ local function on_fs_change(directory)
       return
     end
 
-    -- Debounce
-    local now = vim.uv.now()
-    local last = watcher.last_export[filename] or 0
-    if now - last < M.config.debounce_ms then
-      return
+    local timer = watcher.timers[filename]
+    if not timer then
+      timer = vim.uv.new_timer()
+      watcher.timers[filename] = timer
     end
-    watcher.last_export[filename] = now
-
-    local ipe_path = directory .. "/" .. filename
-
-    vim.schedule(function()
-      local ok, export_err = export_to_pdf(ipe_path)
-      if ok then
-        local pdf_name = filename:gsub("%.ipe$", ".pdf")
-        vim.api.nvim_echo({ { pdf_name .. " ✓", "MoreMsg" } }, false, {})
-      else
-        vim.notify("Export failed: " .. filename .. "\n" .. (export_err or ""), vim.log.levels.ERROR)
-      end
+    timer:stop()
+    timer:start(M.config.debounce_ms, 0, function()
+      vim.schedule(function()
+        local current = M._watchers[directory]
+        if current and current.timers[filename] == timer then
+          current.timers[filename] = nil
+          timer:close()
+        end
+        run_export(directory, filename)
+      end)
     end)
   end
 end
@@ -886,6 +931,12 @@ function M.start_watcher(directory)
     return nil
   end
 
+  -- Normalize to a trailing slash: watchers are keyed by it, and file
+  -- paths are built as directory .. filename.
+  if directory:sub(-1) ~= "/" then
+    directory = directory .. "/"
+  end
+
   if M._watchers[directory] then
     vim.notify("Already watching: " .. directory, vim.log.levels.INFO)
     return true
@@ -904,7 +955,7 @@ function M.start_watcher(directory)
     return nil
   end
 
-  M._watchers[directory] = { handle = handle, last_export = {} }
+  M._watchers[directory] = { handle = handle, timers = {}, busy = {}, pending = {}, exports = 0 }
 
   vim.notify("Watching: " .. directory, vim.log.levels.INFO)
   return true
@@ -934,6 +985,10 @@ function M.stop_watcher(directory)
     local watcher = M._watchers[dir]
     watcher.handle:stop()
     watcher.handle:close()
+    for _, timer in pairs(watcher.timers) do
+      timer:stop()
+      timer:close()
+    end
     M._watchers[dir] = nil
   end
 
@@ -949,7 +1004,7 @@ function M.watcher_status()
 
   local lines = {}
   for dir, watcher in pairs(M._watchers) do
-    table.insert(lines, string.format("%s (%d exported)", dir, vim.tbl_count(watcher.last_export)))
+    table.insert(lines, string.format("%s (%d exports)", dir, watcher.exports))
   end
   table.sort(lines)
   vim.notify("Watching:\n" .. table.concat(lines, "\n"), vim.log.levels.INFO)
