@@ -57,9 +57,9 @@ Lazy.nvim:
       -- <basename>_figures dir. Created on first use, per dir_create_mode.
       library_dir = vim.fn.stdpath("data") .. "/lextern_ipe/library",
 
-      -- Whether :AddFigure!/:InsertFigure! prompt before auto-inserting
-      -- \usepackage{lextern-ipe} (which provides \incfiglibrary) when
-      -- it isn't loaded yet: "ask", "always", "never"
+      -- Whether :AddFigure --lib/:InsertFigure --lib prompt before
+      -- auto-inserting \usepackage{lextern-ipe} (which provides
+      -- \incfiglibrary) when it isn't loaded yet: "ask", "always", "never"
       confirm_missing_library_package = "ask",
 
       -- Optional function(filepath) to launch IPE yourself, e.g. to open
@@ -104,7 +104,7 @@ to check). `:checkhealth lextern_ipe` verifies this is set up correctly.
 Run `:DefineIncfig` to insert `\usepackage{lextern-ipe}` right after the
 last `\usepackage` line, falling back to right after `\documentclass` if
 there's no `\usepackage`, and to the cursor if there's neither
-(`:DefineIncfig!` always inserts at the cursor). `:AddFigure` and
+(`:DefineIncfig --cursor` always inserts at the cursor). `:AddFigure` and
 `:InsertFigure` check whether `\incfig` is defined before inserting a
 `\incfig{...}{}` line, and offer to run this for you if it doesn't look
 defined -- covering `\usepackage{lextern-ipe}`, plain buffer text, *and*
@@ -113,9 +113,9 @@ defined -- covering `\usepackage{lextern-ipe}`, plain buffer text, *and*
 `\RequirePackage`/`\usepackage` indirection (default `2` -- covers e.g. a
 custom `\documentclass` that itself does `\RequirePackage{lextern-ipe}`;
 raise it if your `\incfig` is defined further down a require chain). The
-same resolution applies to `\incfiglibrary`/`:AddFigure!` specifically, not
-just `\incfig` in general. It's still a heuristic, so declining the prompt
-remains a legitimate choice, not just a dismissal.
+same resolution applies to `\incfiglibrary`/`:AddFigure --lib` specifically,
+not just `\incfig` in general. It's still a heuristic, so declining the
+prompt remains a legitimate choice, not just a dismissal.
 
 If you'd rather not depend on `TEXINPUTS` at all, you can skip
 `\usepackage{lextern-ipe}` and define `\incfig` yourself instead -- the
@@ -146,14 +146,14 @@ starter stylesheet is included at `templates/preamble.isy`.
 
 Alongside each document's own `<basename>_figures` dir, there's a single
 shared library (`library_dir`, default `stdpath("data")/lextern_ipe/library`)
-for figures you want to reuse across documents. Add a `!` to target it
+for figures you want to reuse across documents. Add `--lib` to target it
 instead of the current file's own figures dir:
 
 | Command | Targets |
 |---|---|
-| `:AddFigure!` | Create a new figure in the library |
-| `:EditFigure!` | Pick and edit an existing library figure |
-| `:InsertFigure!` | Pick a library figure and insert its `\incfig` at cursor |
+| `:AddFigure --lib` | Create a new figure in the library |
+| `:EditFigure --lib` | Pick and edit an existing library figure |
+| `:InsertFigure --lib` | Pick a library figure and insert its `\incfig` at cursor |
 
 Library figures are referenced as `\incfig{\incfiglibrary/name}{}` rather
 than a path relative to the current file, so the reference stays valid
@@ -167,10 +167,10 @@ document that references it.
 
 | Command | Description |
 |---|---|
-| `:AddFigure` | Prompt for a name, create `.ipe` file, insert `\incfig` at cursor, open IPE, start watcher (`:AddFigure!` targets the library) |
-| `:DefineIncfig` | Insert `\usepackage{lextern-ipe}` after the last `\usepackage` line, or `\documentclass`/cursor as fallbacks (`:DefineIncfig!` to always insert at cursor) |
-| `:EditFigure` | Pick an existing figure and open it in IPE (`:EditFigure!` for the library) |
-| `:InsertFigure` | Pick an existing figure and insert its `\incfig` at cursor (`:InsertFigure!` for the library) |
+| `:AddFigure` | Prompt for a name, create `.ipe` file, insert `\incfig` at cursor, open IPE, start watcher (`:AddFigure --lib` targets the library) |
+| `:DefineIncfig` | Insert `\usepackage{lextern-ipe}` after the last `\usepackage` line, or `\documentclass`/cursor as fallbacks (`:DefineIncfig --cursor` to always insert at cursor) |
+| `:EditFigure` | Pick an existing figure and open it in IPE (`:EditFigure --lib` for the library) |
+| `:InsertFigure` | Pick an existing figure and insert its `\incfig` at cursor (`:InsertFigure --lib` for the library) |
 | `:StartWatcher` | Manually start the file watcher for the current file's figures dir |
 | `:StopWatcher` | Stop every active watcher (per-file and library alike) |
 | `:WatcherStatus` | Show every active watcher and its export count |
