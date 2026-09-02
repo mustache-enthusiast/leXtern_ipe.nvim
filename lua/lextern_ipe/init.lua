@@ -334,19 +334,49 @@ local function package_filenames(lines)
   return names
 end
 
+--- Filename without its .cls/.sty extension
+local function stem_of(filename)
+  return (filename:gsub("%.[^.]*$", ""))
+end
+
+--- Resolve a list of .cls/.sty filenames with a *single* kpsewhich
+--- invocation (each process costs ~100ms; a tikz+hyperref preamble
+--- at depth 2 is ~30 files, so one call per file froze Neovim for
+--- seconds). Returns basename -> absolute path for the files found;
+--- missing ones are simply absent. kpsewhich prints one line per
+--- argument (empty when not found) and exits non-zero if any was
+--- missing, so the exit code is ignored and results are matched back
+--- by basename rather than by position.
+local function kpsewhich_resolve(filenames)
+  local resolved = {}
+  if #filenames == 0 then
+    return resolved
+  end
+  local cmd = { "kpsewhich" }
+  vim.list_extend(cmd, filenames)
+  local output = vim.fn.system(cmd)
+  for line in output:gmatch("[^\r\n]+") do
+    local path = vim.trim(line)
+    if path ~= "" then
+      resolved[vim.fn.fnamemodify(path, ":t")] = path
+    end
+  end
+  return resolved
+end
+
 --- Breadth-first walk of \documentclass/\usepackage/\RequirePackage
---- names starting from `lines`, resolving each via kpsewhich, up to
---- config.kpsewhich_depth levels of further indirection (1 = only what
---- `lines` names directly; each additional level follows one more hop
---- of \RequirePackage/\usepackage inside whatever was just resolved).
---- Calls predicate(stem, file_lines) for every candidate encountered --
---- stem is the filename without its .cls/.sty extension, checked
---- *before* resolving the file (so a predicate that only needs the
---- name, like matching this plugin's own package, doesn't cost a
---- kpsewhich round-trip); file_lines is the resolved file's content on
---- the second call, or nil if it couldn't be resolved/read. Stops and
---- returns true as soon as predicate matches; false if kpsewhich isn't
---- on PATH, kpsewhich_depth <= 0, or nothing matched.
+--- names starting from `lines`, resolving each level via one batched
+--- kpsewhich call, up to config.kpsewhich_depth levels of further
+--- indirection (1 = only what `lines` names directly; each additional
+--- level follows one more hop of \RequirePackage/\usepackage inside
+--- whatever was just resolved). Calls predicate(stem, file_lines) for
+--- every candidate encountered -- stem is the filename without its
+--- .cls/.sty extension, checked *before* resolving the level's files
+--- (so a predicate that only needs the name, like matching this
+--- plugin's own package, doesn't cost a kpsewhich round-trip);
+--- file_lines is the resolved file's content on the second call.
+--- Stops and returns true as soon as predicate matches; false if
+--- kpsewhich isn't on PATH, kpsewhich_depth <= 0, or nothing matched.
 local function walk_kpsewhich_packages(lines, predicate)
   local depth = M.config.kpsewhich_depth or 1
   if depth <= 0 or not has_command("kpsewhich") then
@@ -357,31 +387,33 @@ local function walk_kpsewhich_packages(lines, predicate)
   local queue = package_filenames(lines)
 
   for level = 1, depth do
-    local next_queue = {}
+    -- Name-only pass first: free, and may short-circuit the walk
+    local pending = {}
     for _, filename in ipairs(queue) do
       if not visited[filename] then
         visited[filename] = true
-        local stem = filename:gsub("%.[^.]*$", "")
-        if predicate(stem, nil) then
+        if predicate(stem_of(filename), nil) then
           return true
         end
-        local output = vim.fn.system({ "kpsewhich", filename })
-        if vim.v.shell_error == 0 then
-          local path = vim.trim(output)
-          if path ~= "" then
-            local file_lines = read_file_lines(path)
-            if file_lines then
-              if predicate(stem, file_lines) then
-                return true
-              end
-              if level < depth then
-                vim.list_extend(next_queue, package_filenames(file_lines))
-              end
-            end
-          end
+        table.insert(pending, filename)
+      end
+    end
+
+    local resolved = kpsewhich_resolve(pending)
+    local next_queue = {}
+    for _, filename in ipairs(pending) do
+      local path = resolved[vim.fn.fnamemodify(filename, ":t")]
+      local file_lines = path and read_file_lines(path)
+      if file_lines then
+        if predicate(stem_of(filename), file_lines) then
+          return true
+        end
+        if level < depth then
+          vim.list_extend(next_queue, package_filenames(file_lines))
         end
       end
     end
+
     queue = next_queue
     if #queue == 0 then
       break
@@ -424,40 +456,46 @@ local function has_lextern_ipe_package_loaded()
   return false
 end
 
+--- Buffer-local memo for the (kpsewhich-backed, hence slow) checks
+--- below, keyed on b:changedtick: both positive *and* negative results
+--- are reused until the buffer is edited. Negative caching matters --
+--- when \incfig genuinely isn't defined yet, ensure_incfig_preamble
+--- and define_incfig both check within one :AddFigure, and each
+--- :AddFigure --lib adds a third check; without it every one of those
+--- re-ran the full walk.
+local function cached_check(key, compute)
+  local tick = vim.b.changedtick
+  local cache = vim.b[key]
+  if cache and cache.tick == tick then
+    return cache.result
+  end
+  local result = compute()
+  vim.b[key] = { tick = tick, result = result }
+  return result
+end
+
 --- Check whether \incfig is defined, in the buffer, in a loaded
 --- class/package, or via this plugin's own lextern-ipe.sty (loaded
 --- directly, or indirectly -- e.g. \RequirePackage{lextern-ipe} inside
---- a custom class file). Caches a positive result on the buffer so
---- repeated calls (e.g. across several :AddFigure invocations) don't
---- re-shell out to kpsewhich every time.
+--- a custom class file). Cached per buffer until the next edit.
 local function incfig_is_defined()
-  if vim.b.lextern_ipe_incfig_defined then
-    return true
-  end
-  local found = has_incfig_defined() or has_lextern_ipe_package_loaded() or has_incfig_in_loaded_packages()
-  if found then
-    vim.b.lextern_ipe_incfig_defined = true
-  end
-  return found
+  return cached_check("lextern_ipe_incfig_check", function()
+    return has_incfig_defined() or has_lextern_ipe_package_loaded() or has_incfig_in_loaded_packages()
+  end)
 end
 
 --- Check whether lextern-ipe.sty (and so \incfiglibrary) is loaded, in
 --- the buffer directly or transitively (e.g. via a custom class file's
---- own \RequirePackage{lextern-ipe}). Caches a positive result on the
---- buffer.
+--- own \RequirePackage{lextern-ipe}). Cached per buffer until the next
+--- edit.
 local function library_package_is_loaded()
-  if vim.b.lextern_ipe_library_package_loaded then
-    return true
-  end
-  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-  local found = has_lextern_ipe_package_loaded()
-    or walk_kpsewhich_packages(lines, function(stem)
-      return stem == PACKAGE_NAME
-    end)
-  if found then
-    vim.b.lextern_ipe_library_package_loaded = true
-  end
-  return found
+  return cached_check("lextern_ipe_library_check", function()
+    local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+    return has_lextern_ipe_package_loaded()
+      or walk_kpsewhich_packages(lines, function(stem)
+        return stem == PACKAGE_NAME
+      end)
+  end)
 end
 
 --- Find the 1-based line number of a line containing `pattern` in the
