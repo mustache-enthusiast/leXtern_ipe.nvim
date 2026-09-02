@@ -24,6 +24,16 @@ local function check_executable(name, opts)
   end
 end
 
+--- Report on whether config[key] is one of "ask"/"always"/"never"
+local function check_ask_always_never(config, key)
+  local value = config[key]
+  if value == "ask" or value == "always" or value == "never" then
+    vim.health.ok(key .. " = " .. value)
+  else
+    vim.health.error(key .. " is invalid: " .. tostring(value), { 'Expected "ask", "always", or "never"' })
+  end
+end
+
 function M.check()
   vim.health.start("lextern_ipe.nvim")
 
@@ -69,43 +79,10 @@ function M.check()
   end
   local config = lextern_ipe.config
 
-  local ask_always_never = { ask = true, always = true, never = true }
-
-  if ask_always_never[config.dir_create_mode] then
-    vim.health.ok("dir_create_mode = " .. config.dir_create_mode)
-  else
-    vim.health.error(
-      "dir_create_mode is invalid: " .. tostring(config.dir_create_mode),
-      { 'Expected "ask", "always", or "never"' }
-    )
-  end
-
-  if ask_always_never[config.confirm_missing_preamble] then
-    vim.health.ok("confirm_missing_preamble = " .. config.confirm_missing_preamble)
-  else
-    vim.health.error(
-      "confirm_missing_preamble is invalid: " .. tostring(config.confirm_missing_preamble),
-      { 'Expected "ask", "always", or "never"' }
-    )
-  end
-
-  if ask_always_never[config.confirm_duplicate_preamble] then
-    vim.health.ok("confirm_duplicate_preamble = " .. config.confirm_duplicate_preamble)
-  else
-    vim.health.error(
-      "confirm_duplicate_preamble is invalid: " .. tostring(config.confirm_duplicate_preamble),
-      { 'Expected "ask", "always", or "never"' }
-    )
-  end
-
-  if ask_always_never[config.confirm_missing_library_package] then
-    vim.health.ok("confirm_missing_library_package = " .. config.confirm_missing_library_package)
-  else
-    vim.health.error(
-      "confirm_missing_library_package is invalid: " .. tostring(config.confirm_missing_library_package),
-      { 'Expected "ask", "always", or "never"' }
-    )
-  end
+  check_ask_always_never(config, "dir_create_mode")
+  check_ask_always_never(config, "confirm_missing_preamble")
+  check_ask_always_never(config, "confirm_duplicate_preamble")
+  check_ask_always_never(config, "confirm_missing_library_package")
 
   if type(config.library_dir) == "string" and config.library_dir ~= "" then
     vim.health.ok("library_dir = " .. config.library_dir)

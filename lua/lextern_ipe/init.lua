@@ -151,16 +151,20 @@ local function ensure_dir(directory)
     return true
   end
 
-  local mode = M.config.dir_create_mode
-
-  if mode == "never" then
-    return nil, "Directory does not exist: " .. directory
-  elseif mode == "always" then
+  local function do_mkdir()
     if vim.fn.mkdir(directory, "p") == 0 then
       return nil, "Failed to create directory: " .. directory
     end
     vim.notify("Created figures directory: " .. directory, vim.log.levels.INFO)
     return true
+  end
+
+  local mode = M.config.dir_create_mode
+
+  if mode == "never" then
+    return nil, "Directory does not exist: " .. directory
+  elseif mode == "always" then
+    return do_mkdir()
   elseif mode == "ask" then
     local response = vim.fn.confirm(
       "Figures directory does not exist:\n" .. directory .. "\n\nCreate it?",
@@ -169,11 +173,7 @@ local function ensure_dir(directory)
     if response ~= 1 then
       return nil, "Directory creation cancelled"
     end
-    if vim.fn.mkdir(directory, "p") == 0 then
-      return nil, "Failed to create directory: " .. directory
-    end
-    vim.notify("Created figures directory: " .. directory, vim.log.levels.INFO)
-    return true
+    return do_mkdir()
   end
 
   return nil, "Invalid dir_create_mode: " .. tostring(mode)
@@ -460,29 +460,22 @@ local function library_package_is_loaded()
   return found
 end
 
---- Find the 1-based line number of the last \usepackage line in the
---- current buffer, or nil if there isn't one
-local function find_last_usepackage_line()
+--- Find the 1-based line number of a line containing `pattern` in the
+--- current buffer, or nil if there isn't one. want_last=true returns
+--- the last match (for \usepackage, where anchoring after the latest
+--- one reads naturally); false/omitted returns the first.
+local function find_line(pattern, want_last)
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-  local last = nil
+  local found = nil
   for i, line in ipairs(lines) do
-    if line:find("\\usepackage", 1, true) then
-      last = i
+    if line:find(pattern, 1, true) then
+      found = i
+      if not want_last then
+        return found
+      end
     end
   end
-  return last
-end
-
---- Find the 1-based line number of the \documentclass line in the
---- current buffer, or nil if there isn't one
-local function find_documentclass_line()
-  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-  for i, line in ipairs(lines) do
-    if line:find("\\documentclass", 1, true) then
-      return i
-    end
-  end
-  return nil
+  return found
 end
 
 --- Insert text at cursor position as new lines
@@ -506,7 +499,7 @@ local function insert_package_usepackage(at_cursor)
     return
   end
 
-  local anchor = find_last_usepackage_line() or find_documentclass_line()
+  local anchor = find_line("\\usepackage", true) or find_line("\\documentclass")
   if not anchor then
     vim.notify(
       "No \\usepackage or \\documentclass line found; inserting at cursor instead.",
@@ -853,6 +846,31 @@ local function incfig_arg(use_library, name)
   return get_figures_reldir() .. "/" .. name
 end
 
+--- Insert a \incfig{...}{} usage line at cursor for `name` in
+--- target_dir(use_library).
+local function insert_incfig_line(use_library, name)
+  insert_at_cursor(string.format("\\incfig{%s}{}", incfig_arg(use_library, name)))
+end
+
+--- Resolve target_dir(use_library) and list its figures, notifying on
+--- either failure. Returns (dir, figures), or nil (already notified)
+--- if the directory couldn't be resolved or has no figures.
+local function list_target_figures(use_library)
+  local dir, err = target_dir(use_library)
+  if not dir then
+    vim.notify(err, vim.log.levels.ERROR)
+    return nil
+  end
+
+  local figures = list_figures(dir)
+  if #figures == 0 then
+    vim.notify("No figures found in: " .. dir, vim.log.levels.INFO)
+    return nil
+  end
+
+  return dir, figures
+end
+
 function M.create_figure(use_library)
   ui_input("Figure name", function(name)
     if not name then
@@ -885,7 +903,7 @@ function M.create_figure(use_library)
       return
     end
 
-    insert_at_cursor(string.format("\\incfig{%s}{}", incfig_arg(use_library, filename)))
+    insert_incfig_line(use_library, filename)
 
     open_ipe(ipe_path)
     ensure_watcher(dir)
@@ -895,15 +913,8 @@ function M.create_figure(use_library)
 end
 
 function M.edit_figure(use_library)
-  local dir, err = target_dir(use_library)
+  local dir, figures = list_target_figures(use_library)
   if not dir then
-    vim.notify(err, vim.log.levels.ERROR)
-    return
-  end
-
-  local figures = list_figures(dir)
-  if #figures == 0 then
-    vim.notify("No figures found in: " .. dir, vim.log.levels.INFO)
     return
   end
 
@@ -924,15 +935,8 @@ function M.edit_figure(use_library)
 end
 
 function M.insert_figure(use_library)
-  local dir, err = target_dir(use_library)
+  local dir, figures = list_target_figures(use_library)
   if not dir then
-    vim.notify(err, vim.log.levels.ERROR)
-    return
-  end
-
-  local figures = list_figures(dir)
-  if #figures == 0 then
-    vim.notify("No figures found in: " .. dir, vim.log.levels.INFO)
     return
   end
 
@@ -941,7 +945,7 @@ function M.insert_figure(use_library)
       return
     end
 
-    insert_at_cursor(string.format("\\incfig{%s}{}", incfig_arg(use_library, selected)))
+    insert_incfig_line(use_library, selected)
   end)
 end
 
