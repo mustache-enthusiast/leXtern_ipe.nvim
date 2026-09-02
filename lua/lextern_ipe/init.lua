@@ -150,15 +150,119 @@ local function has_command(cmd)
   return vim.fn.executable(cmd) == 1
 end
 
+--- Whether a line looks like a definition of \incfig (as opposed to a
+--- usage, e.g. \incfig{foo}{caption})
+local function line_defines_incfig(line)
+  if not line:find("\\incfig", 1, true) then
+    return false
+  end
+  return line:find("\\newcommand", 1, true) ~= nil
+    or line:find("\\renewcommand", 1, true) ~= nil
+    or line:find("\\providecommand", 1, true) ~= nil
+    or line:find("\\def\\incfig", 1, true) ~= nil
+    or line:find("DeclareRobustCommand", 1, true) ~= nil
+    or line:find("NewDocumentCommand", 1, true) ~= nil
+end
+
 --- Check whether the current buffer already defines \incfig
 local function has_incfig_defined()
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
   for _, line in ipairs(lines) do
-    if line:find("\\newcommand", 1, true) and line:find("\\incfig", 1, true) then
+    if line_defines_incfig(line) then
       return true
     end
   end
   return false
+end
+
+--- Extract the comma-separated argument names from a
+--- "\command[options]{name1,name2}" invocation on a line
+local function extract_arg_names(line, command)
+  local idx = line:find("\\" .. command, 1, true)
+  if not idx then
+    return {}
+  end
+  local rest = line:sub(idx + 1 + #command)
+  if rest:match("^%s*%[") then
+    local _, close = rest:find("%b[]")
+    if close then
+      rest = rest:sub(close + 1)
+    end
+  end
+  local braces = rest:match("^%s*{([^}]*)}")
+  if not braces then
+    return {}
+  end
+  local names = {}
+  for name in braces:gmatch("[^,%s]+") do
+    table.insert(names, name)
+  end
+  return names
+end
+
+--- Whether the file at path defines \incfig
+local function file_defines_incfig(path)
+  local f = io.open(path, "r")
+  if not f then
+    return false
+  end
+  local content = f:read("*all")
+  f:close()
+  for line in (content .. "\n"):gmatch("([^\n]*)\n") do
+    if line_defines_incfig(line) then
+      return true
+    end
+  end
+  return false
+end
+
+--- Check whether \incfig is defined by a \documentclass or \usepackage
+--- the buffer loads, by resolving those names to files via kpsewhich
+--- and scanning them directly (one level -- packages loaded *by* a
+--- class/package aren't followed). Returns false if kpsewhich isn't
+--- on PATH rather than erroring.
+local function has_incfig_in_loaded_packages()
+  if not has_command("kpsewhich") then
+    return false
+  end
+
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local candidates = {}
+  for _, line in ipairs(lines) do
+    for _, name in ipairs(extract_arg_names(line, "documentclass")) do
+      table.insert(candidates, name .. ".cls")
+    end
+    for _, name in ipairs(extract_arg_names(line, "usepackage")) do
+      table.insert(candidates, name .. ".sty")
+    end
+  end
+
+  for _, filename in ipairs(candidates) do
+    local output = vim.fn.system({ "kpsewhich", filename })
+    if vim.v.shell_error == 0 then
+      local path = vim.trim(output)
+      if path ~= "" and file_defines_incfig(path) then
+        return true
+      end
+    end
+  end
+
+  return false
+end
+
+--- Check whether \incfig is defined, in the buffer or in a loaded
+--- class/package. Caches a positive result on the buffer so repeated
+--- calls (e.g. across several :AddFigure invocations) don't re-shell
+--- out to kpsewhich every time.
+local function incfig_is_defined()
+  if vim.b.lextern_ipe_incfig_defined then
+    return true
+  end
+  local found = has_incfig_defined() or has_incfig_in_loaded_packages()
+  if found then
+    vim.b.lextern_ipe_incfig_defined = true
+  end
+  return found
 end
 
 --- Find the 1-based line number of the last \usepackage line in the
@@ -187,16 +291,17 @@ local function read_template(name)
   return (content:gsub("\n+$", ""))
 end
 
---- Warn and offer to insert the \incfig preamble if this buffer doesn't
---- appear to define it yet. This is only a buffer-local heuristic --
---- \incfig may be defined in a shared .sty file instead, so declining
---- is a legitimate choice, not just a dismissal.
+--- Warn and offer to insert the \incfig preamble if it doesn't appear
+--- to be defined yet (checking the buffer and any resolvable loaded
+--- class/package). This is still a heuristic -- e.g. a package that
+--- itself requires another package defining \incfig won't be found --
+--- so declining is a legitimate choice, not just a dismissal.
 local function ensure_incfig_preamble()
-  if has_incfig_defined() then
+  if incfig_is_defined() then
     return
   end
   local response = vim.fn.confirm(
-    "\\incfig does not appear to be defined in this buffer.\n\nInsert the preamble now?",
+    "\\incfig does not appear to be defined (checked buffer and loaded packages).\n\nInsert the preamble now?",
     "&Yes\n&No", 1
   )
   if response == 1 then
@@ -525,9 +630,9 @@ end
 --- last \usepackage line (falling back to cursor position if none is
 --- found); pass at_cursor=true to always insert at the cursor instead.
 function M.define_incfig(at_cursor)
-  if has_incfig_defined() then
+  if incfig_is_defined() then
     local response = vim.fn.confirm(
-      "\\incfig already appears to be defined in this buffer.\n\nInsert anyway?",
+      "\\incfig already appears to be defined (buffer or loaded packages).\n\nInsert anyway?",
       "&Yes\n&No", 2
     )
     if response ~= 1 then

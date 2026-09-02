@@ -74,12 +74,16 @@ need your figures to use the same fonts and macros as your document, point IPE
 to a custom stylesheet via `export IPESTYLES="path/to/stylesheet.isy"`. A
 starter stylesheet is included at `templates/preamble.isy`.
 
-`:AddFigure` and `:InsertFigure` check whether `\incfig` looks defined
-anywhere in the current buffer before inserting a `\incfig{...}{}` line. If
-it doesn't, they'll ask whether to insert the preamble for you (via
-`:DefineIncfig`'s default placement) before continuing. This is a
-buffer-only check, so it can't see a definition living in a separate
-`.sty` file — decline the prompt in that case.
+`:AddFigure` and `:InsertFigure` check whether `\incfig` is defined before
+inserting a `\incfig{...}{}` line. If it doesn't look defined, they'll ask
+whether to insert the preamble for you (via `:DefineIncfig`'s default
+placement) before continuing. This check isn't just buffer text: it also
+resolves any `\documentclass`/`\usepackage` names through `kpsewhich` (part
+of any TeX distribution) and scans those files directly, so a custom
+`.cls`/`.sty` that defines `\incfig` itself is recognized and you won't be
+asked every time. It's still a heuristic — a package that defines `\incfig`
+indirectly via a package *it* requires won't be found — so declining the
+prompt is a legitimate choice, not just a dismissal.
 
 ## Commands
 
