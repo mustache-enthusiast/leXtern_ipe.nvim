@@ -2,9 +2,10 @@ local M = {}
 
 -- Name of the LaTeX package this plugin generates and manages. Providing
 -- \incfig (as a fallback -- \providecommand, safe even if \incfig is
--- already defined elsewhere) and \incfiglibrary. Must be discoverable by
--- LaTeX via \usepackage, which requires PACKAGE_DIR (below) to be on
--- TEXINPUTS -- see :checkhealth lextern_ipe.
+-- already defined elsewhere), \incfiglib (library figures, labelled
+-- fig:lib:<name>) and \incfiglibrary (the library path). Must be
+-- discoverable by LaTeX via \usepackage, which requires package_dir()
+-- (below) to be on TEXINPUTS -- see :checkhealth lextern_ipe.
 local PACKAGE_NAME = "lextern-ipe"
 
 -- ============================================================
@@ -718,10 +719,10 @@ local function ensure_incfig_preamble()
 end
 
 --- Warn and offer to insert \usepackage{lextern-ipe} if it doesn't
---- appear to be loaded yet -- needed for \incfiglibrary specifically.
+--- appear to be loaded yet -- needed for \incfiglib specifically.
 --- Deliberately narrower than incfig_is_defined(): \incfig might
 --- already be available some other way (buffer text, an external
---- class/package), but \incfiglibrary is only ever provided by this
+--- class/package), but \incfiglib is only ever provided by this
 --- package, so it needs its own presence check rather than reusing
 --- ensure_incfig_preamble's. Governed by
 --- config.confirm_missing_library_package ("ask"/"always"/"never").
@@ -740,7 +741,7 @@ local function ensure_library_package()
   end
 
   local response = vim.fn.confirm(
-    "\\incfiglibrary isn't available (\\usepackage{lextern-ipe} not found in this buffer).\n\nInsert it now?",
+    "\\incfiglib isn't available (\\usepackage{lextern-ipe} not found in this buffer or loaded packages).\n\nInsert it now?",
     "&Yes\n&No", 1
   )
   if response == 1 then
@@ -1105,26 +1106,27 @@ local function target_dir(use_library)
   return get_figures_dir()
 end
 
---- Build the \incfig{...} first argument for a figure in target_dir:
---- \incfiglibrary/name for the library, reldir/name for a per-file
+--- Build the figure-inclusion line for `name` in target_dir:
+--- \incfiglib{name}{} for the library (the package resolves the path
+--- and labels it fig:lib:name), \incfig{reldir/name}{} for a per-file
 --- figure. Also ensures the relevant preamble/package is present --
---- just the package check for the library (it provides \incfig too,
---- so a separate \incfig prompt would only ever offer to insert the
---- same line twice).
-local function incfig_arg(use_library, name)
+--- just the package check for the library (\incfiglib only comes from
+--- the package, which provides \incfig too, so a separate \incfig
+--- prompt would only ever offer to insert the same line twice).
+local function incfig_line(use_library, name)
   if use_library then
     ensure_library_package()
-    return "\\incfiglibrary/" .. name
+    return string.format("\\incfiglib{%s}{}", name)
   end
   ensure_incfig_preamble()
-  return get_figures_reldir() .. "/" .. name
+  return string.format("\\incfig{%s/%s}{}", get_figures_reldir(), name)
 end
 
---- Insert a \incfig{...}{} usage line at cursor for `name` in
+--- Insert the inclusion line at cursor for `name` in
 --- target_dir(use_library), leaving the cursor on the caption's
 --- closing brace so `i` types straight into it.
 local function insert_incfig_line(use_library, name)
-  local line = string.format("\\incfig{%s}{}", incfig_arg(use_library, name))
+  local line = incfig_line(use_library, name)
   local lnum = insert_at_cursor(line)
   vim.api.nvim_win_set_cursor(0, { lnum, #line - 1 })
 end

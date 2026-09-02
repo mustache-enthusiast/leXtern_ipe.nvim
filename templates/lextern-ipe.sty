@@ -10,3 +10,16 @@
         \label{fig:#1}
     \end{figure}
 }
+% Library figures: \incfiglib{name}{caption} looks name.pdf up in the
+% shared library (\incfiglibrary, appended below by the plugin from its
+% library_dir config) and labels it fig:lib:name, so \ref{fig:lib:name}
+% works without the library's absolute path leaking into the label.
+% \renewcommand it in your document to change the layout.
+\newcommand{\incfiglib}[2]{%
+    \begin{figure}[htbp]
+        \centering
+        \includegraphics[width=0.8\linewidth]{\incfiglibrary/#1.pdf}
+        \caption{#2}
+        \label{fig:lib:#1}
+    \end{figure}
+}

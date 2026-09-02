@@ -95,7 +95,8 @@ generates and maintains a small LaTeX package, `lextern-ipe.sty`, at
 `setup()` runs, so it always reflects your current `library_dir`). It
 provides `\incfig` as a fallback (via `\providecommand`, so it's a no-op if
 you already define `\incfig` yourself elsewhere -- e.g. in a shared class
-file) and `\incfiglibrary` (see [Figure library](#figure-library) below).
+file) and `\incfiglib` for library figures (see
+[Figure library](#figure-library) below).
 
 For LaTeX to find it via `\usepackage{lextern-ipe}`, add its directory to
 `TEXINPUTS` in your shell profile:
@@ -119,7 +120,7 @@ defined -- covering `\usepackage{lextern-ipe}`, plain buffer text, *and*
 `\RequirePackage`/`\usepackage` indirection (default `2` -- covers e.g. a
 custom `\documentclass` that itself does `\RequirePackage{lextern-ipe}`;
 raise it if your `\incfig` is defined further down a require chain). The
-same resolution applies to `\incfiglibrary`/`:AddFigure --lib` specifically,
+same resolution applies to `\incfiglib`/`:AddFigure --lib` specifically,
 not just `\incfig` in general. It's still a heuristic, so declining the
 prompt remains a legitimate choice, not just a dismissal.
 
@@ -141,7 +142,7 @@ plugin only ever checks whether it's defined, never how:
 ```
 
 Note this opts out of the [figure library](#figure-library), which needs
-`\incfiglibrary` from the generated package specifically.
+`\incfiglib` from the generated package specifically.
 
 ## Figure stylesheets
 
@@ -206,15 +207,31 @@ instead of the current file's own figures dir:
 |---|---|
 | `:AddFigure --lib` | Create a new figure in the library |
 | `:EditFigure --lib` | Pick and edit an existing library figure |
-| `:InsertFigure --lib` | Pick a library figure and insert its `\incfig` at cursor |
+| `:InsertFigure --lib` | Pick a library figure and insert its `\incfiglib` at cursor |
 
-Library figures are referenced as `\incfig{\incfiglibrary/name}{}` rather
-than a path relative to the current file, so the reference stays valid
-regardless of where the `.tex` file itself lives. `\incfiglibrary` always
-resolves to the *current* `library_dir` at compile time (it's defined in the
-generated package, not copied into your document), so moving the library
-later is a one-line config change, not a find-and-replace across every
-document that references it.
+Library figures are referenced as `\incfiglib{name}{caption}` rather than
+by a path relative to the current file, so the reference stays valid
+regardless of where the `.tex` file itself lives. `\incfiglib` is defined in
+the generated package:
+
+```latex
+\newcommand{\incfiglib}[2]{%
+    \begin{figure}[htbp]
+        \centering
+        \includegraphics[width=0.8\linewidth]{\incfiglibrary/#1.pdf}
+        \caption{#2}
+        \label{fig:lib:#1}
+    \end{figure}
+}
+```
+
+`\incfiglibrary` is the library path, appended to the package from your
+`library_dir` every time `setup()` runs, so moving the library later is a
+one-line config change, not a find-and-replace across every document. The
+label is `fig:lib:<name>`, so `\ref{fig:lib:free-body-diagram}` -- the
+library's absolute path never ends up in a label. `\renewcommand` it in your
+document if you want a different layout. (Documents from before `\incfiglib`
+existed, which reference `\incfig{\incfiglibrary/name}{}`, keep compiling.)
 
 ## Commands
 
@@ -223,7 +240,7 @@ document that references it.
 | `:AddFigure` | Prompt for a name, create `.ipe` file, insert `\incfig` at cursor, open IPE, start watcher (`:AddFigure --lib` targets the library) |
 | `:DefineIncfig` | Insert `\usepackage{lextern-ipe}` after the last `\usepackage` line, or `\documentclass`/cursor as fallbacks (`:DefineIncfig --cursor` to always insert at cursor) |
 | `:EditFigure` | Pick an existing figure and open it in IPE (`:EditFigure --lib` for the library) |
-| `:InsertFigure` | Pick an existing figure and insert its `\incfig` at cursor (`:InsertFigure --lib` for the library) |
+| `:InsertFigure` | Pick an existing figure and insert its `\incfig` at cursor (`:InsertFigure --lib` inserts `\incfiglib` for a library figure) |
 | `:StartWatcher` | Manually start the file watcher for the current file's figures dir |
 | `:StopWatcher` | Stop every active watcher (per-file and library alike) |
 | `:WatcherStatus` | Show every active watcher and its export count |
@@ -252,5 +269,5 @@ Per-file figures are stored in a directory derived from the `.tex` filename
 (e.g. `foo.tex` → `foo_figures/`), next to the document itself. This keeps
 figures separated per document and makes it easy to move a `.tex` file along
 with its figures. Figures meant to be shared across documents instead go in
-the [library](#figure-library) (`library_dir`), referenced by absolute path
-via `\incfiglibrary` rather than colocation.
+the [library](#figure-library) (`library_dir`), referenced by name via
+`\incfiglib` rather than by colocation.
