@@ -485,6 +485,12 @@ local function find_documentclass_line()
   return nil
 end
 
+--- Insert text at cursor position as new lines
+local function insert_at_cursor(text)
+  local lines = vim.split(text, "\n", { plain = true })
+  vim.api.nvim_put(lines, "l", true, true)
+end
+
 --- Insert \usepackage{lextern-ipe} (providing \incfig as a fallback
 --- and \incfiglibrary). Placed right after the last \usepackage,
 --- falling back to right after \documentclass, falling back to cursor
@@ -655,12 +661,6 @@ local function create_ipe_from_template(dest_path)
   f:close()
 
   return true
-end
-
---- Insert text at cursor position as new lines
-local function insert_at_cursor(text)
-  local lines = vim.split(text, "\n", { plain = true })
-  vim.api.nvim_put(lines, "l", true, true)
 end
 
 -- ============================================================
