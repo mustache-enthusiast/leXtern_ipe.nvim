@@ -52,7 +52,7 @@ function M.check()
 
   vim.health.start("lextern_ipe.nvim: templates")
   local root = plugin_root()
-  for _, name in ipairs({ "template.ipe", "incfig.tex", "preamble.isy" }) do
+  for _, name in ipairs({ "template.ipe", "lextern-ipe.sty", "preamble.isy" }) do
     local path = root .. "/templates/" .. name
     if vim.fn.filereadable(path) == 1 then
       vim.health.ok("templates/" .. name .. " found")
@@ -98,6 +98,21 @@ function M.check()
     )
   end
 
+  if ask_always_never[config.confirm_missing_library_package] then
+    vim.health.ok("confirm_missing_library_package = " .. config.confirm_missing_library_package)
+  else
+    vim.health.error(
+      "confirm_missing_library_package is invalid: " .. tostring(config.confirm_missing_library_package),
+      { 'Expected "ask", "always", or "never"' }
+    )
+  end
+
+  if type(config.library_dir) == "string" and config.library_dir ~= "" then
+    vim.health.ok("library_dir = " .. config.library_dir)
+  else
+    vim.health.error("library_dir should be a non-empty string, got: " .. tostring(config.library_dir))
+  end
+
   if type(config.debounce_ms) == "number" and config.debounce_ms >= 0 then
     vim.health.ok(string.format("debounce_ms = %d", config.debounce_ms))
   else
@@ -120,6 +135,35 @@ function M.check()
     vim.health.ok("launch_cmd is set to a custom function")
   else
     vim.health.error("launch_cmd should be a function or nil, got: " .. type(config.launch_cmd))
+  end
+
+  vim.health.start("lextern_ipe.nvim: library package")
+  local expected_pkg = vim.fn.stdpath("data") .. "/lextern_ipe/lextern-ipe.sty"
+  if vim.fn.filereadable(expected_pkg) == 0 then
+    vim.health.warn(
+      "Generated package not found: " .. expected_pkg,
+      { "Call require('lextern_ipe').setup() (or restart Neovim) to generate it." }
+    )
+  elseif vim.fn.executable("kpsewhich") == 0 then
+    vim.health.info(
+      "Package generated at " .. expected_pkg .. "; can't verify TEXINPUTS without kpsewhich"
+    )
+  else
+    local output = vim.fn.system({ "kpsewhich", "lextern-ipe.sty" })
+    local resolved = vim.v.shell_error == 0 and vim.trim(output) or ""
+    if resolved == expected_pkg then
+      vim.health.ok("TEXINPUTS is set up correctly (kpsewhich finds " .. expected_pkg .. ")")
+    elseif resolved ~= "" then
+      vim.health.warn("kpsewhich found a different lextern-ipe.sty than expected", {
+        "Expected: " .. expected_pkg,
+        "Found: " .. resolved,
+      })
+    else
+      vim.health.warn("\\usepackage{lextern-ipe} will not be found by LaTeX -- TEXINPUTS isn't set up", {
+        "Add this directory to TEXINPUTS in your shell profile:",
+        'export TEXINPUTS="' .. vim.fn.stdpath("data") .. '/lextern_ipe//:$TEXINPUTS"',
+      })
+    end
   end
 
   vim.health.start("lextern_ipe.nvim: IPE stylesheet")

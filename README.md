@@ -16,9 +16,10 @@ so they pick up whatever UI provider you have configured (e.g.
 or fall back to Neovim's native prompts otherwise.
 
 Run `:checkhealth lextern_ipe` to verify `ipe`/`ipetoipe` are on PATH, your
-config is valid, and to see whether `kpsewhich` is available (optional --
-used to resolve `\incfig` definitions in a loaded class/package; see
-[LaTeX setup](#latex-setup)).
+config is valid, whether `kpsewhich` is available (optional -- used to
+resolve `\incfig` definitions in a loaded class/package; see
+[LaTeX setup](#latex-setup)), and whether `TEXINPUTS` is set up correctly
+(needed for the [figure library](#figure-library)).
 
 ## Setup
 
@@ -49,6 +50,16 @@ Lazy.nvim:
       -- definition when one is already found: "ask", "always", "never"
       confirm_duplicate_preamble = "ask",
 
+      -- Absolute path to the shared figure library (see "Figure
+      -- library" below), separate from each document's own
+      -- <basename>_figures dir. Created on first use, per dir_create_mode.
+      library_dir = vim.fn.stdpath("data") .. "/lextern_ipe/library",
+
+      -- Whether :AddFigure!/:InsertFigure! prompt before auto-inserting
+      -- \usepackage{lextern-ipe} (which provides \incfiglibrary) when
+      -- it isn't loaded yet: "ask", "always", "never"
+      confirm_missing_library_package = "ask",
+
       -- Optional function(filepath) to launch IPE yourself, e.g. to open
       -- it floating under a tiling WM. When nil, IPE is launched as a
       -- plain detached job. Example for Hyprland:
@@ -70,11 +81,40 @@ All config options are optional and the defaults are shown above.
 
 ## LaTeX setup
 
-The `\incfig` command needs to be defined in your document preamble (or a
-shared `.sty` file) before you can use it. Run `:DefineIncfig` to insert it
-right after the last `\usepackage` line, falling back to right after
-`\documentclass` if there's no `\usepackage`, and to the cursor if there's
-neither (`:DefineIncfig!` always inserts at the cursor), or add it by hand:
+The `\incfig` command needs to be defined before you can use it. The plugin
+generates and maintains a small LaTeX package, `lextern-ipe.sty`, at
+`stdpath("data")/lextern_ipe/lextern-ipe.sty` (regenerated every time
+`setup()` runs, so it always reflects your current `library_dir`). It
+provides `\incfig` as a fallback (via `\providecommand`, so it's a no-op if
+you already define `\incfig` yourself elsewhere -- e.g. in a shared class
+file) and `\incfiglibrary` (see [Figure library](#figure-library) below).
+
+For LaTeX to find it via `\usepackage{lextern-ipe}`, add its directory to
+`TEXINPUTS` in your shell profile:
+
+```sh
+export TEXINPUTS="$HOME/.local/share/nvim/lextern_ipe//:$TEXINPUTS"
+```
+
+(adjust the path if your `stdpath("data")` differs -- run `:lua print(vim.fn.stdpath("data"))`
+to check). `:checkhealth lextern_ipe` verifies this is set up correctly.
+
+Run `:DefineIncfig` to insert `\usepackage{lextern-ipe}` right after the
+last `\usepackage` line, falling back to right after `\documentclass` if
+there's no `\usepackage`, and to the cursor if there's neither
+(`:DefineIncfig!` always inserts at the cursor). `:AddFigure` and
+`:InsertFigure` check whether `\incfig` is defined before inserting a
+`\incfig{...}{}` line, and offer to run this for you if it doesn't look
+defined -- covering `\usepackage{lextern-ipe}`, plain buffer text, *and*
+(via `kpsewhich`, part of any TeX distribution) a `\documentclass`/
+`\usepackage` you already load, up to `kpsewhich_depth` levels of
+`\RequirePackage`/`\usepackage` indirection (default `1`; raise it if your
+`\incfig` is defined further down a require chain). It's still a heuristic,
+so declining the prompt remains a legitimate choice, not just a dismissal.
+
+If you'd rather not depend on `TEXINPUTS` at all, you can skip
+`\usepackage{lextern-ipe}` and define `\incfig` yourself instead -- the
+plugin only ever checks whether it's defined, never how:
 
 ```latex
 \usepackage{graphicx}
@@ -89,35 +129,46 @@ neither (`:DefineIncfig!` always inserts at the cursor), or add it by hand:
 }
 ```
 
+Note this opts out of the [figure library](#figure-library), which needs
+`\incfiglibrary` from the generated package specifically.
+
 By default, IPE renders text in figures using its own basic preamble. If you
 need your figures to use the same fonts and macros as your document, point IPE
 to a custom stylesheet via `export IPESTYLES="path/to/stylesheet.isy"`. A
 starter stylesheet is included at `templates/preamble.isy`.
 
-`:AddFigure` and `:InsertFigure` check whether `\incfig` is defined before
-inserting a `\incfig{...}{}` line. If it doesn't look defined, they'll ask
-whether to insert the preamble for you (via `:DefineIncfig`'s default
-placement) before continuing. This check isn't just buffer text: it also
-resolves any `\documentclass`/`\usepackage` names through `kpsewhich` (part
-of any TeX distribution) and scans those files directly, so a custom
-`.cls`/`.sty` that defines `\incfig` itself is recognized and you won't be
-asked every time. This follows `\RequirePackage`/`\usepackage` indirection
-up to `kpsewhich_depth` levels deep (default `1` — only what the buffer
-names directly); raise it if your `\incfig` is defined further down a
-require chain. It's still a heuristic, so declining the prompt remains a
-legitimate choice, not just a dismissal.
+## Figure library
+
+Alongside each document's own `<basename>_figures` dir, there's a single
+shared library (`library_dir`, default `stdpath("data")/lextern_ipe/library`)
+for figures you want to reuse across documents. Add a `!` to target it
+instead of the current file's own figures dir:
+
+| Command | Targets |
+|---|---|
+| `:AddFigure!` | Create a new figure in the library |
+| `:EditFigure!` | Pick and edit an existing library figure |
+| `:InsertFigure!` | Pick a library figure and insert its `\incfig` at cursor |
+
+Library figures are referenced as `\incfig{\incfiglibrary/name}{}` rather
+than a path relative to the current file, so the reference stays valid
+regardless of where the `.tex` file itself lives. `\incfiglibrary` always
+resolves to the *current* `library_dir` at compile time (it's defined in the
+generated package, not copied into your document), so moving the library
+later is a one-line config change, not a find-and-replace across every
+document that references it.
 
 ## Commands
 
 | Command | Description |
 |---|---|
-| `:AddFigure` | Prompt for a name, create `.ipe` file, insert `\incfig` at cursor, open IPE, start watcher |
-| `:DefineIncfig` | Insert the `\incfig` macro after the last `\usepackage` line, or `\documentclass`/cursor as fallbacks (`:DefineIncfig!` to always insert at cursor) |
-| `:EditFigure` | Pick an existing figure and open it in IPE |
-| `:InsertFigure` | Pick an existing figure and insert its `\incfig` at cursor |
-| `:StartWatcher` | Manually start the file watcher |
-| `:StopWatcher` | Stop the file watcher |
-| `:WatcherStatus` | Show watcher state |
+| `:AddFigure` | Prompt for a name, create `.ipe` file, insert `\incfig` at cursor, open IPE, start watcher (`:AddFigure!` targets the library) |
+| `:DefineIncfig` | Insert `\usepackage{lextern-ipe}` after the last `\usepackage` line, or `\documentclass`/cursor as fallbacks (`:DefineIncfig!` to always insert at cursor) |
+| `:EditFigure` | Pick an existing figure and open it in IPE (`:EditFigure!` for the library) |
+| `:InsertFigure` | Pick an existing figure and insert its `\incfig` at cursor (`:InsertFigure!` for the library) |
+| `:StartWatcher` | Manually start the file watcher for the current file's figures dir |
+| `:StopWatcher` | Stop every active watcher (per-file and library alike) |
+| `:WatcherStatus` | Show every active watcher and its export count |
 
 ### Suggested keymaps
 
@@ -139,6 +190,9 @@ legitimate choice, not just a dismissal.
 
 ## File organization
 
-Figures are stored in a directory derived from the `.tex` filename
-(e.g. `foo.tex` → `foo_figures/`). This keeps figures separated per document
-and makes it easy to move a `.tex` file along with its figures.
+Per-file figures are stored in a directory derived from the `.tex` filename
+(e.g. `foo.tex` → `foo_figures/`), next to the document itself. This keeps
+figures separated per document and makes it easy to move a `.tex` file along
+with its figures. Figures meant to be shared across documents instead go in
+the [library](#figure-library) (`library_dir`), referenced by absolute path
+via `\incfiglibrary` rather than colocation.

@@ -1,5 +1,12 @@
 local M = {}
 
+-- Name of the LaTeX package this plugin generates and manages. Providing
+-- \incfig (as a fallback -- \providecommand, safe even if \incfig is
+-- already defined elsewhere) and \incfiglibrary. Must be discoverable by
+-- LaTeX via \usepackage, which requires PACKAGE_DIR (below) to be on
+-- TEXINPUTS -- see :checkhealth lextern_ipe.
+local PACKAGE_NAME = "lextern-ipe"
+
 -- ============================================================
 -- Configuration
 -- ============================================================
@@ -29,6 +36,22 @@ M.config = {
   -- definition when one is already found: "ask", "always", "never"
   confirm_duplicate_preamble = "ask",
 
+  -- Absolute path to the shared figure library, separate from each
+  -- document's own <basename>_figures dir. Created on first use, per
+  -- dir_create_mode. Used by :AddFigure!/:EditFigure!/:InsertFigure!.
+  -- Baked into the generated lextern-ipe.sty package as \incfiglibrary
+  -- (see PACKAGE_NAME below) -- changing this only takes effect for
+  -- documents after the next :setup()/Neovim restart regenerates the
+  -- package; already-\usepackage{lextern-ipe}'d documents pick it up
+  -- automatically at their next compile, no per-document edits needed.
+  library_dir = vim.fn.stdpath("data") .. "/lextern_ipe/library",
+
+  -- Whether :AddFigure!/:InsertFigure! prompt before auto-inserting
+  -- \usepackage{lextern-ipe} (which provides \incfiglibrary) when it
+  -- can't find the package loaded in the buffer: "ask" (default),
+  -- "always", "never"
+  confirm_missing_library_package = "ask",
+
   -- Reserved for future use: customizing where/how the figures
   -- directory is named and located, instead of the fixed
   -- "<basename>_figures" convention currently hardcoded in
@@ -46,28 +69,8 @@ M.config = {
 -- Watcher state
 -- ============================================================
 
-M._watcher = {
-  watching = false,
-  directory = nil,
-  handle = nil,
-  last_export = {},
-}
-
--- ============================================================
--- Setup
--- ============================================================
-
-function M.setup(opts)
-  M.config = vim.tbl_deep_extend("force", M.config, opts or {})
-
-  vim.api.nvim_create_autocmd("VimLeavePre", {
-    callback = function()
-      if M._watcher.watching then
-        M.stop_watcher()
-      end
-    end,
-  })
-end
+--- directory -> { handle = <uv fs_event>, last_export = { [filename] = ms } }
+M._watchers = {}
 
 -- ============================================================
 -- Internal utilities
@@ -78,6 +81,47 @@ local function plugin_root()
   local source = debug.getinfo(1, "S").source:sub(2)
   -- source is <plugin_root>/lua/lextern_ipe/init.lua → go up 3 levels
   return vim.fn.fnamemodify(source, ":h:h:h")
+end
+
+--- Directory the generated lextern-ipe.sty lives in. Needs to be on
+--- TEXINPUTS for \usepackage{lextern-ipe} to find it -- see
+--- :checkhealth lextern_ipe.
+local function package_dir()
+  return vim.fn.stdpath("data") .. "/lextern_ipe"
+end
+
+--- (Re)generate <package_dir>/lextern-ipe.sty from
+--- templates/lextern-ipe.sty plus the current library_dir. Called from
+--- setup(), so the package stays in sync with config across restarts;
+--- if you change library_dir at runtime without restarting, call this
+--- again (or just re-require("lextern_ipe").setup(...)) to refresh it.
+--- Returns true or nil + error message.
+local function write_package_file()
+  local template = plugin_root() .. "/templates/" .. PACKAGE_NAME .. ".sty"
+  local f = io.open(template, "r")
+  if not f then
+    return nil, "Template not found: " .. template
+  end
+  local content = f:read("*all")
+  f:close()
+
+  local library_dir = (M.config.library_dir or ""):gsub("/+$", "")
+  content = content .. string.format("\\newcommand{\\incfiglibrary}{%s}\n", library_dir)
+
+  local dir = package_dir()
+  if vim.fn.isdirectory(dir) == 0 and vim.fn.mkdir(dir, "p") == 0 then
+    return nil, "Failed to create package directory: " .. dir
+  end
+
+  local dest = dir .. "/" .. PACKAGE_NAME .. ".sty"
+  f = io.open(dest, "w")
+  if not f then
+    return nil, "Cannot write package file: " .. dest
+  end
+  f:write(content)
+  f:close()
+
+  return true
 end
 
 --- Convert a figure title to a valid filename
@@ -149,6 +193,22 @@ local function get_figures_dir()
     return nil, err
   end
   return fig_dir
+end
+
+--- Get the absolute path to the shared figure library, creating it if
+--- needed per dir_create_mode. Returns the path (with trailing slash)
+--- or nil + error message.
+local function get_library_dir()
+  local dir = M.config.library_dir
+  if dir:sub(-1) ~= "/" then
+    dir = dir .. "/"
+  end
+
+  local ok, err = ensure_dir(dir)
+  if not ok then
+    return nil, err
+  end
+  return dir
 end
 
 --- Get the figures directory name relative to the tex file
@@ -316,15 +376,31 @@ local function has_incfig_in_loaded_packages()
   return false
 end
 
---- Check whether \incfig is defined, in the buffer or in a loaded
---- class/package. Caches a positive result on the buffer so repeated
---- calls (e.g. across several :AddFigure invocations) don't re-shell
---- out to kpsewhich every time.
+--- Check whether the current buffer loads this plugin's generated
+--- lextern-ipe.sty (\usepackage{lextern-ipe}), which provides both
+--- \incfig (as a fallback) and \incfiglibrary.
+local function has_lextern_ipe_package_loaded()
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  for _, line in ipairs(lines) do
+    for _, name in ipairs(extract_arg_names(line, "usepackage")) do
+      if name == PACKAGE_NAME then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+--- Check whether \incfig is defined, in the buffer, in a loaded
+--- class/package, or via this plugin's own lextern-ipe.sty. Caches a
+--- positive result on the buffer so repeated calls (e.g. across
+--- several :AddFigure invocations) don't re-shell out to kpsewhich
+--- every time.
 local function incfig_is_defined()
   if vim.b.lextern_ipe_incfig_defined then
     return true
   end
-  local found = has_incfig_defined() or has_incfig_in_loaded_packages()
+  local found = has_incfig_defined() or has_incfig_in_loaded_packages() or has_lextern_ipe_package_loaded()
   if found then
     vim.b.lextern_ipe_incfig_defined = true
   end
@@ -356,17 +432,32 @@ local function find_documentclass_line()
   return nil
 end
 
---- Read a template file's contents, trimming a trailing newline
---- Returns the content string, or nil + error message
-local function read_template(name)
-  local path = plugin_root() .. "/templates/" .. name
-  local f = io.open(path, "r")
-  if not f then
-    return nil, "Template not found: " .. path
+--- Insert \usepackage{lextern-ipe} (providing \incfig as a fallback
+--- and \incfiglibrary). Placed right after the last \usepackage,
+--- falling back to right after \documentclass, falling back to cursor
+--- position; pass at_cursor=true to always insert at the cursor
+--- instead. No presence/duplicate checks of its own -- callers
+--- (M.define_incfig, ensure_library_package) apply their own, distinct
+--- checks before calling this.
+local function insert_package_usepackage(at_cursor)
+  local line = string.format("\\usepackage{%s}", PACKAGE_NAME)
+
+  if at_cursor then
+    insert_at_cursor(line)
+    return
   end
-  local content = f:read("*all")
-  f:close()
-  return (content:gsub("\n+$", ""))
+
+  local anchor = find_last_usepackage_line() or find_documentclass_line()
+  if not anchor then
+    vim.notify(
+      "No \\usepackage or \\documentclass line found; inserting at cursor instead.",
+      vim.log.levels.INFO
+    )
+    insert_at_cursor(line)
+    return
+  end
+
+  vim.api.nvim_buf_set_lines(0, anchor, anchor, false, { line })
 end
 
 --- Warn and offer to insert the \incfig preamble if it doesn't appear
@@ -395,6 +486,37 @@ local function ensure_incfig_preamble()
   )
   if response == 1 then
     M.define_incfig(false)
+  end
+end
+
+--- Warn and offer to insert \usepackage{lextern-ipe} if it doesn't
+--- appear to be loaded yet -- needed for \incfiglibrary specifically.
+--- Deliberately narrower than incfig_is_defined(): \incfig might
+--- already be available some other way (buffer text, an external
+--- class/package), but \incfiglibrary is only ever provided by this
+--- package, so it needs its own presence check rather than reusing
+--- ensure_incfig_preamble's. Governed by
+--- config.confirm_missing_library_package ("ask"/"always"/"never").
+local function ensure_library_package()
+  if has_lextern_ipe_package_loaded() then
+    return
+  end
+
+  local mode = M.config.confirm_missing_library_package
+  if mode == "never" then
+    return
+  end
+  if mode == "always" then
+    insert_package_usepackage(false)
+    return
+  end
+
+  local response = vim.fn.confirm(
+    "\\incfiglibrary isn't available (\\usepackage{lextern-ipe} not found in this buffer).\n\nInsert it now?",
+    "&Yes\n&No", 1
+  )
+  if response == 1 then
+    insert_package_usepackage(false)
   end
 end
 
@@ -492,45 +614,59 @@ end
 -- File watcher
 -- ============================================================
 
-local function on_fs_change(err, filename, events)
-  if err or not filename then
-    return
-  end
-
-  if not filename:match("%.ipe$") then
-    return
-  end
-
-  -- Debounce
-  local now = vim.uv.now()
-  local last = M._watcher.last_export[filename] or 0
-  if now - last < M.config.debounce_ms then
-    return
-  end
-  M._watcher.last_export[filename] = now
-
-  local ipe_path = M._watcher.directory .. "/" .. filename
-
-  vim.schedule(function()
-    local ok, export_err = export_to_pdf(ipe_path)
-    if ok then
-      local pdf_name = filename:gsub("%.ipe$", ".pdf")
-      vim.api.nvim_echo({ { pdf_name .. " ✓", "MoreMsg" } }, false, {})
-    else
-      vim.notify("Export failed: " .. filename .. "\n" .. (export_err or ""), vim.log.levels.ERROR)
+--- Build the fs-event callback for one watched directory. Each
+--- watcher gets its own closure so on_fs_change knows which directory
+--- (and which watcher's debounce state) it belongs to.
+local function on_fs_change(directory)
+  return function(err, filename, events)
+    if err or not filename then
+      return
     end
-  end)
+
+    if not filename:match("%.ipe$") then
+      return
+    end
+
+    local watcher = M._watchers[directory]
+    if not watcher then
+      return
+    end
+
+    -- Debounce
+    local now = vim.uv.now()
+    local last = watcher.last_export[filename] or 0
+    if now - last < M.config.debounce_ms then
+      return
+    end
+    watcher.last_export[filename] = now
+
+    local ipe_path = directory .. "/" .. filename
+
+    vim.schedule(function()
+      local ok, export_err = export_to_pdf(ipe_path)
+      if ok then
+        local pdf_name = filename:gsub("%.ipe$", ".pdf")
+        vim.api.nvim_echo({ { pdf_name .. " ✓", "MoreMsg" } }, false, {})
+      else
+        vim.notify("Export failed: " .. filename .. "\n" .. (export_err or ""), vim.log.levels.ERROR)
+      end
+    end)
+  end
 end
 
---- Silently ensure the watcher is running for the current figures dir
-local function ensure_watcher()
-  if M._watcher.watching then
+--- Silently ensure a watcher is running for `directory` (defaults to
+--- the current file's own figures dir)
+local function ensure_watcher(directory)
+  if not directory then
+    directory = get_figures_dir()
+    if not directory then
+      return
+    end
+  end
+  if M._watchers[directory] then
     return
   end
-  local dir = get_figures_dir()
-  if dir then
-    M.start_watcher(dir)
-  end
+  M.start_watcher(directory)
 end
 
 function M.start_watcher(directory)
@@ -548,14 +684,9 @@ function M.start_watcher(directory)
     return nil
   end
 
-  if M._watcher.watching then
-    if M._watcher.directory == directory then
-      vim.notify("Already watching: " .. directory, vim.log.levels.INFO)
-      return true
-    else
-      vim.notify("Already watching: " .. M._watcher.directory, vim.log.levels.WARN)
-      return nil
-    end
+  if M._watchers[directory] then
+    vim.notify("Already watching: " .. directory, vim.log.levels.INFO)
+    return true
   end
 
   local handle = vim.uv.new_fs_event()
@@ -564,59 +695,112 @@ function M.start_watcher(directory)
     return nil
   end
 
-  local ok, watch_err = handle:start(directory, {}, on_fs_change)
+  local ok, watch_err = handle:start(directory, {}, on_fs_change(directory))
   if not ok then
     handle:close()
     vim.notify("Failed to start watcher: " .. (watch_err or "unknown"), vim.log.levels.ERROR)
     return nil
   end
 
-  M._watcher.watching = true
-  M._watcher.directory = directory
-  M._watcher.handle = handle
-  M._watcher.last_export = {}
+  M._watchers[directory] = { handle = handle, last_export = {} }
 
   vim.notify("Watching: " .. directory, vim.log.levels.INFO)
   return true
 end
 
-function M.stop_watcher()
-  if not M._watcher.watching then
+--- Stop a specific watcher (directory), or every active watcher if
+--- directory is omitted.
+function M.stop_watcher(directory)
+  local targets = {}
+  if directory then
+    if M._watchers[directory] then
+      table.insert(targets, directory)
+    end
+  else
+    for dir in pairs(M._watchers) do
+      table.insert(targets, dir)
+    end
+  end
+
+  if #targets == 0 then
     vim.notify("Watcher not running", vim.log.levels.INFO)
     return nil
   end
 
-  if M._watcher.handle then
-    M._watcher.handle:stop()
-    M._watcher.handle:close()
+  table.sort(targets)
+  for _, dir in ipairs(targets) do
+    local watcher = M._watchers[dir]
+    watcher.handle:stop()
+    watcher.handle:close()
+    M._watchers[dir] = nil
   end
 
-  M._watcher.watching = false
-  M._watcher.directory = nil
-  M._watcher.handle = nil
-  M._watcher.last_export = {}
-
-  vim.notify("Watcher stopped", vim.log.levels.INFO)
+  vim.notify("Watcher stopped: " .. table.concat(targets, ", "), vim.log.levels.INFO)
   return true
 end
 
 function M.watcher_status()
-  if not M._watcher.watching then
+  if vim.tbl_isempty(M._watchers) then
     vim.notify("Watcher is not running", vim.log.levels.INFO)
-  else
-    vim.notify(string.format(
-      "Watching: %s\nFiles exported: %d",
-      M._watcher.directory,
-      vim.tbl_count(M._watcher.last_export)
-    ), vim.log.levels.INFO)
+    return
   end
+
+  local lines = {}
+  for dir, watcher in pairs(M._watchers) do
+    table.insert(lines, string.format("%s (%d exported)", dir, vim.tbl_count(watcher.last_export)))
+  end
+  table.sort(lines)
+  vim.notify("Watching:\n" .. table.concat(lines, "\n"), vim.log.levels.INFO)
+end
+
+-- ============================================================
+-- Setup
+-- ============================================================
+
+function M.setup(opts)
+  M.config = vim.tbl_deep_extend("force", M.config, opts or {})
+
+  local ok, err = write_package_file()
+  if not ok then
+    vim.notify("lextern_ipe: failed to write " .. PACKAGE_NAME .. ".sty: " .. err, vim.log.levels.ERROR)
+  end
+
+  vim.api.nvim_create_autocmd("VimLeavePre", {
+    callback = function()
+      if not vim.tbl_isempty(M._watchers) then
+        M.stop_watcher()
+      end
+    end,
+  })
 end
 
 -- ============================================================
 -- Commands
 -- ============================================================
 
-function M.create_figure()
+--- Get the target directory for a figure command: the shared library
+--- (use_library truthy) or the current file's own figures dir.
+--- Returns the directory (with trailing slash) or nil + error message.
+local function target_dir(use_library)
+  if use_library then
+    return get_library_dir()
+  end
+  return get_figures_dir()
+end
+
+--- Build the \incfig{...} first argument for a figure in target_dir:
+--- \incfiglibrary/name for the library, reldir/name for a per-file
+--- figure. Also ensures the relevant preamble/package is present.
+local function incfig_arg(use_library, name)
+  ensure_incfig_preamble()
+  if use_library then
+    ensure_library_package()
+    return "\\incfiglibrary/" .. name
+  end
+  return get_figures_reldir() .. "/" .. name
+end
+
+function M.create_figure(use_library)
   ui_input("Figure name", function(name)
     if not name then
       return
@@ -628,14 +812,14 @@ function M.create_figure()
       return
     end
 
-    local fig_dir
-    fig_dir, err = get_figures_dir()
-    if not fig_dir then
+    local dir
+    dir, err = target_dir(use_library)
+    if not dir then
       vim.notify(err, vim.log.levels.ERROR)
       return
     end
 
-    local ipe_path = fig_dir .. filename .. ".ipe"
+    local ipe_path = dir .. filename .. ".ipe"
     if vim.fn.filereadable(ipe_path) == 1 then
       vim.notify("Figure already exists: " .. filename .. ".ipe", vim.log.levels.WARN)
       return
@@ -648,77 +832,72 @@ function M.create_figure()
       return
     end
 
-    ensure_incfig_preamble()
-
-    -- Insert \incfig at cursor
-    local reldir = get_figures_reldir()
-    insert_at_cursor(string.format("\\incfig{%s/%s}{}", reldir, filename))
+    insert_at_cursor(string.format("\\incfig{%s}{}", incfig_arg(use_library, filename)))
 
     open_ipe(ipe_path)
-    ensure_watcher()
+    ensure_watcher(dir)
 
     vim.notify("Created: " .. filename .. ".ipe", vim.log.levels.INFO)
   end)
 end
 
-function M.edit_figure()
-  local fig_dir, err = get_figures_dir()
-  if not fig_dir then
+function M.edit_figure(use_library)
+  local dir, err = target_dir(use_library)
+  if not dir then
     vim.notify(err, vim.log.levels.ERROR)
     return
   end
 
-  local figures = list_figures(fig_dir)
+  local figures = list_figures(dir)
   if #figures == 0 then
-    vim.notify("No figures found in: " .. fig_dir, vim.log.levels.INFO)
+    vim.notify("No figures found in: " .. dir, vim.log.levels.INFO)
     return
   end
 
-  ui_select(figures, "Edit figure", function(selected)
+  ui_select(figures, use_library and "Edit library figure" or "Edit figure", function(selected)
     if not selected then
       return
     end
 
-    local ipe_path = fig_dir .. selected .. ".ipe"
+    local ipe_path = dir .. selected .. ".ipe"
     if vim.fn.filereadable(ipe_path) == 0 then
       vim.notify("File not found: " .. ipe_path, vim.log.levels.ERROR)
       return
     end
 
     open_ipe(ipe_path)
-    ensure_watcher()
+    ensure_watcher(dir)
   end)
 end
 
-function M.insert_figure()
-  local fig_dir, err = get_figures_dir()
-  if not fig_dir then
+function M.insert_figure(use_library)
+  local dir, err = target_dir(use_library)
+  if not dir then
     vim.notify(err, vim.log.levels.ERROR)
     return
   end
 
-  local figures = list_figures(fig_dir)
+  local figures = list_figures(dir)
   if #figures == 0 then
-    vim.notify("No figures found in: " .. fig_dir, vim.log.levels.INFO)
+    vim.notify("No figures found in: " .. dir, vim.log.levels.INFO)
     return
   end
 
-  ui_select(figures, "Insert figure", function(selected)
+  ui_select(figures, use_library and "Insert library figure" or "Insert figure", function(selected)
     if not selected then
       return
     end
 
-    ensure_incfig_preamble()
-
-    local reldir = get_figures_reldir()
-    insert_at_cursor(string.format("\\incfig{%s/%s}{}", reldir, selected))
+    insert_at_cursor(string.format("\\incfig{%s}{}", incfig_arg(use_library, selected)))
   end)
 end
 
---- Insert the \incfig preamble. By default it's placed right after the
---- last \usepackage line, falling back to right after \documentclass if
---- there's no \usepackage, and to cursor position if there's neither;
---- pass at_cursor=true to always insert at the cursor instead.
+--- Ensure \usepackage{lextern-ipe} is present (providing \incfig as a
+--- fallback and \incfiglibrary). By default it's placed right after
+--- the last \usepackage line, falling back to right after
+--- \documentclass if there's no \usepackage, and to cursor position if
+--- there's neither; pass at_cursor=true to always insert at the cursor
+--- instead.
 function M.define_incfig(at_cursor)
   if incfig_is_defined() then
     local mode = M.config.confirm_duplicate_preamble
@@ -736,28 +915,7 @@ function M.define_incfig(at_cursor)
     end
   end
 
-  local content, err = read_template("incfig.tex")
-  if not content then
-    vim.notify(err, vim.log.levels.ERROR)
-    return
-  end
-
-  if at_cursor then
-    insert_at_cursor(content)
-    return
-  end
-
-  local anchor = find_last_usepackage_line() or find_documentclass_line()
-  if not anchor then
-    vim.notify(
-      "No \\usepackage or \\documentclass line found; inserting at cursor instead.",
-      vim.log.levels.INFO
-    )
-    insert_at_cursor(content)
-    return
-  end
-
-  vim.api.nvim_buf_set_lines(0, anchor, anchor, false, vim.split(content, "\n", { plain = true }))
+  insert_package_usepackage(at_cursor)
 end
 
 return M
