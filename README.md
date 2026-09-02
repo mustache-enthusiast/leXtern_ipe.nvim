@@ -272,3 +272,7 @@ Tests run with isolated `XDG_*` directories and a temporary working
 directory, so they never touch your real config or data. Tests that need a
 tool that isn't installed (`ipetoipe`, `kpsewhich`, `pdflatex`) skip
 themselves. `tests/helpers.lua` documents the small `T` helper API.
+
+## License
+
+[MIT](LICENSE)

@@ -58,13 +58,6 @@ M.config = {
   -- packages: "ask" (default), "always", "never"
   confirm_missing_library_package = "ask",
 
-  -- Reserved for future use: customizing where/how the figures
-  -- directory is named and located, instead of the fixed
-  -- "<basename>_figures" convention currently hardcoded in
-  -- get_figures_dir()/get_figures_reldir(). Not yet consumed by the
-  -- plugin.
-  -- figures_dir_pattern = "%s_figures",
-
   -- Open Ipe as a floating, centered window. Hyprland only: it's done
   -- by evaluating hl.exec_cmd(...) inside the compositor via
   -- `hyprctl eval` (see lua/lextern_ipe/hyprland.lua). Falls back to a
