@@ -52,8 +52,9 @@ All config options are optional and the defaults are shown above.
 ## LaTeX setup
 
 The `\incfig` command needs to be defined in your document preamble (or a
-shared `.sty` file) before you can use it. Run `:AddPreamble` with your
-cursor at the target location to insert it, or add it by hand:
+shared `.sty` file) before you can use it. Run `:DefineIncfig` to insert it
+right after the last `\usepackage` line (or `:DefineIncfig!` to insert at
+the cursor instead), or add it by hand:
 
 ```latex
 \usepackage{graphicx}
@@ -73,12 +74,19 @@ need your figures to use the same fonts and macros as your document, point IPE
 to a custom stylesheet via `export IPESTYLES="path/to/stylesheet.isy"`. A
 starter stylesheet is included at `templates/preamble.isy`.
 
+`:AddFigure` and `:InsertFigure` check whether `\incfig` looks defined
+anywhere in the current buffer before inserting a `\incfig{...}{}` line. If
+it doesn't, they'll ask whether to insert the preamble for you (via
+`:DefineIncfig`'s default placement) before continuing. This is a
+buffer-only check, so it can't see a definition living in a separate
+`.sty` file — decline the prompt in that case.
+
 ## Commands
 
 | Command | Description |
 |---|---|
 | `:AddFigure` | Prompt for a name, create `.ipe` file, insert `\incfig` at cursor, open IPE, start watcher |
-| `:AddPreamble` | Insert the `\incfig` macro definition at cursor |
+| `:DefineIncfig` | Insert the `\incfig` macro after the last `\usepackage` line (`:DefineIncfig!` to insert at cursor instead) |
 | `:EditFigure` | Pick an existing figure and open it in IPE |
 | `:InsertFigure` | Pick an existing figure and insert its `\incfig` at cursor |
 | `:StartWatcher` | Manually start the file watcher |

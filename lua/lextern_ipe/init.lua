@@ -161,6 +161,19 @@ local function has_incfig_defined()
   return false
 end
 
+--- Find the 1-based line number of the last \usepackage line in the
+--- current buffer, or nil if there isn't one
+local function find_last_usepackage_line()
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local last = nil
+  for i, line in ipairs(lines) do
+    if line:find("\\usepackage", 1, true) then
+      last = i
+    end
+  end
+  return last
+end
+
 --- Read a template file's contents, trimming a trailing newline
 --- Returns the content string, or nil + error message
 local function read_template(name)
@@ -172,6 +185,23 @@ local function read_template(name)
   local content = f:read("*all")
   f:close()
   return (content:gsub("\n+$", ""))
+end
+
+--- Warn and offer to insert the \incfig preamble if this buffer doesn't
+--- appear to define it yet. This is only a buffer-local heuristic --
+--- \incfig may be defined in a shared .sty file instead, so declining
+--- is a legitimate choice, not just a dismissal.
+local function ensure_incfig_preamble()
+  if has_incfig_defined() then
+    return
+  end
+  local response = vim.fn.confirm(
+    "\\incfig does not appear to be defined in this buffer.\n\nInsert the preamble now?",
+    "&Yes\n&No", 1
+  )
+  if response == 1 then
+    M.define_incfig(false)
+  end
 end
 
 -- ============================================================
@@ -424,6 +454,8 @@ function M.create_figure()
       return
     end
 
+    ensure_incfig_preamble()
+
     -- Insert \incfig at cursor
     local reldir = get_figures_reldir()
     insert_at_cursor(string.format("\\incfig{%s/%s}{}", reldir, filename))
@@ -482,12 +514,17 @@ function M.insert_figure()
       return
     end
 
+    ensure_incfig_preamble()
+
     local reldir = get_figures_reldir()
     insert_at_cursor(string.format("\\incfig{%s/%s}{}", reldir, selected))
   end)
 end
 
-function M.add_preamble()
+--- Insert the \incfig preamble. By default it's placed right after the
+--- last \usepackage line (falling back to cursor position if none is
+--- found); pass at_cursor=true to always insert at the cursor instead.
+function M.define_incfig(at_cursor)
   if has_incfig_defined() then
     local response = vim.fn.confirm(
       "\\incfig already appears to be defined in this buffer.\n\nInsert anyway?",
@@ -504,7 +541,19 @@ function M.add_preamble()
     return
   end
 
-  insert_at_cursor(content)
+  if at_cursor then
+    insert_at_cursor(content)
+    return
+  end
+
+  local anchor = find_last_usepackage_line()
+  if not anchor then
+    vim.notify("No \\usepackage line found; inserting at cursor instead.", vim.log.levels.INFO)
+    insert_at_cursor(content)
+    return
+  end
+
+  vim.api.nvim_buf_set_lines(0, anchor, anchor, false, vim.split(content, "\n", { plain = true }))
 end
 
 return M

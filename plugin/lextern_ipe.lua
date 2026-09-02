@@ -1,17 +1,19 @@
 -- leXtern_ipe.nvim command registration
 -- This file is auto-loaded by Neovim from the plugin/ directory
 
-local function cmd(name, fn)
-  vim.api.nvim_create_user_command(name, fn, {})
+local function cmd(name, fn, opts)
+  vim.api.nvim_create_user_command(name, fn, opts or {})
 end
 
 cmd("AddFigure", function()
   require("lextern_ipe").create_figure()
 end)
 
-cmd("AddPreamble", function()
-  require("lextern_ipe").add_preamble()
-end)
+-- :DefineIncfig inserts after the last \usepackage line; :DefineIncfig!
+-- inserts at the cursor instead.
+cmd("DefineIncfig", function(opts)
+  require("lextern_ipe").define_incfig(opts.bang)
+end, { bang = true })
 
 cmd("EditFigure", function()
   require("lextern_ipe").edit_figure()
