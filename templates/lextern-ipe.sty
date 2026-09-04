@@ -2,12 +2,35 @@
 \NeedsTeXFormat{LaTeX2e}
 \ProvidesPackage{lextern-ipe}
 \RequirePackage{graphicx}
+% \lxi@setbase{path} sets \lxi@base to everything after the last "/",
+% so \incfig labels a figure fig:<name>, not fig:<dir>/<name>: within
+% one document every \incfig path shares the same <basename>_figures
+% directory, so the directory part disambiguates nothing.
+\def\lxi@setbase#1{\lxi@split#1/\@nil}
+\def\lxi@split#1/#2\@nil{%
+    \def\lxi@rest{#2}%
+    \ifx\lxi@rest\@empty
+        \def\lxi@base{#1}%
+        \let\lxi@next\relax
+    \else
+        \def\lxi@next{\lxi@split#2\@nil}%
+    \fi
+    \lxi@next
+}
+% \lxi@label{path} labels the enclosing figure fig:<name>. The name is
+% \edef'd before \label sees it because \label defers its write to
+% shipout, by which point \lxi@base has moved on to a later figure.
+\newcommand{\lxi@label}[1]{%
+    \lxi@setbase{#1}%
+    \edef\lxi@name{fig:\lxi@base}%
+    \expandafter\label\expandafter{\lxi@name}%
+}
 \providecommand{\incfig}[2]{%
     \begin{figure}[htbp]
         \centering
         \includegraphics[width=0.8\linewidth]{#1.pdf}
         \caption{#2}
-        \label{fig:#1}
+        \lxi@label{#1}
     \end{figure}
 }
 % Library figures: \incfiglib{name}{caption} looks name.pdf up in the

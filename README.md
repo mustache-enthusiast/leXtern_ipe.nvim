@@ -35,6 +35,7 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
     { "<leader>fa", "<cmd>AddFigure<cr>",    ft = "tex", desc = "Add Ipe figure" },
     { "<leader>fe", "<cmd>EditFigure<cr>",   ft = "tex", desc = "Edit Ipe figure" },
     { "<leader>fi", "<cmd>InsertFigure<cr>", ft = "tex", desc = "Insert Ipe figure" },
+    { "<leader>fl", "<cmd>LabelFigure<cr>",  ft = "tex", desc = "Label Ipe figure" },
   },
   config = function()
     require("lextern_ipe").setup({}) -- see Configuration
@@ -62,7 +63,8 @@ your configuration.
    isn't defined yet it offers to add `\usepackage{lextern-ipe}` first.
 4. Draw. Each save in Ipe re-exports the PDF.
 5. Back in Neovim the cursor is on the caption's closing brace, so `i` types
-   straight into it.
+   straight into it. The figure is `\ref{fig:free-body-diagram}`, or
+   whatever you rename it to with `:LabelFigure`.
 
 Figures live in `<document>_figures/` next to the `.tex` file, so a document
 and its figures move together. Figures shared between documents go in the
@@ -75,13 +77,15 @@ and its figures move together. Figures shared between documents go in the
 | `:AddFigure` | Prompt for a name, create the figure, insert `\incfig`, open Ipe, start the watcher |
 | `:EditFigure` | Pick an existing figure and open it in Ipe |
 | `:InsertFigure` | Pick an existing figure and insert its `\incfig` at the cursor |
+| `:LabelFigure` | Pick a figure and give it a `\label` of your own, updating references to the old one |
 | `:DefineIncfig` | Insert `\usepackage{lextern-ipe}` after the last `\usepackage` (or after `\documentclass`, or at the cursor) |
 | `:StartWatcher` | Start the PDF export watcher for this document's figures dir |
 | `:StopWatcher` | Stop every watcher |
 | `:WatcherStatus` | List active watchers and their export counts |
 
-Flags: `--lib` on `:AddFigure`, `:EditFigure`, and `:InsertFigure` targets
-the [library](#figure-library) instead of the document's own figures dir.
+Flags: `--lib` on `:AddFigure`, `:EditFigure`, `:InsertFigure`, and
+`:LabelFigure` targets the [library](#figure-library) instead of the
+document's own figures dir.
 `--cursor` on `:DefineIncfig` always inserts at the cursor.
 
 ## Configuration
@@ -138,10 +142,22 @@ names it doesn't recognize.
 `stdpath("data")/lextern_ipe/`. It provides:
 
 - `\incfig{path}{caption}`: a centered `figure` with
-  `\includegraphics[width=0.8\linewidth]{path.pdf}` and `\label{fig:path}`.
-  Defined with `\providecommand`, so your own definition wins if you have one.
+  `\includegraphics[width=0.8\linewidth]{path.pdf}`, labelled `fig:name`
+  after the last path component — `\incfig{notes_figures/flux}{}` is
+  `\ref{fig:flux}`. Defined with `\providecommand`, so your own definition
+  wins if you have one.
 - `\incfiglib{name}{caption}`: the same for a [library](#figure-library)
   figure, labelled `fig:lib:name`.
+
+The directory is left out of the label deliberately: every `\incfig` in a
+document draws from that document's own `<basename>_figures/`, so the path
+would disambiguate nothing. `:LabelFigure` replaces the derived label
+with one of your own — see [Labels](#labels).
+
+> **Upgrading:** labels used to include the directory
+> (`fig:notes_figures/flux`). If you have documents written against that,
+> either update their `\ref`s or keep the old scheme with your own
+> `\newcommand{\incfig}` — see below.
 
 The `TEXINPUTS` line from [Installation](#installation) is what lets
 `\usepackage{lextern-ipe}` find it. If your `stdpath("data")` isn't
@@ -157,7 +173,9 @@ ignored. It's a heuristic, so declining the prompt is a legitimate answer.
 **Defining `\incfig` yourself.** If you'd rather not touch `TEXINPUTS`, put
 this in your preamble or class instead. The plugin only checks that
 `\incfig` exists, never how it's defined. This does opt out of the library,
-which needs `\incfiglib` from the package.
+which needs `\incfiglib` from the package. The version below labels by
+path, `fig:notes_figures/flux`; `:LabelFigure` works either way, since it
+writes the label out in full.
 
 ```latex
 \usepackage{graphicx}
@@ -170,6 +188,50 @@ which needs `\incfiglib` from the package.
     \end{figure}
 }
 ```
+
+## Labels
+
+`\incfig` works its label out from the path, which is fine until it isn't:
+`\ref{fig:diagram-3}` says nothing about what the diagram is. `:LabelFigure`
+picks a figure the same way `:EditFigure` does, asks for a label, and gives
+the figure that one instead.
+
+The macro takes no label argument — it can't, without breaking every
+document that defines its own `\incfig` — so the call is expanded into the
+figure environment it stood for, with the `\label` written out:
+
+```latex
+\incfig{notes_figures/flux}{Flux through a closed surface}
+```
+
+becomes
+
+```latex
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.8\linewidth]{notes_figures/flux.pdf}
+    \caption{Flux through a closed surface}
+    \label{fig:gauss}
+\end{figure}
+```
+
+That environment is exactly what `\incfig` expands to, so nothing about the
+figure changes except the label. Everything else follows:
+
+- A bare name gets the `fig:` prefix (`gauss` → `fig:gauss`); anything with
+  a prefix of its own (`eq:gauss`) is taken as written.
+- `\ref`, `\autoref`, `\cref` and friends pointing at the old label are
+  updated in the current buffer, including inside `\cref{a,b}` lists. Other
+  files in a multi-file project are not touched.
+- Run it again on an expanded figure and it just rewrites the `\label`;
+  the environment isn't expanded twice.
+- Indentation and any comments on the `\incfig` line are kept.
+- If a document includes the same figure twice, the one nearest the cursor
+  is labelled, and you're told about the other.
+- A label already used by another `\label` is a warning, not a refusal.
+
+`:LabelFigure` only labels a figure the buffer already includes —
+`:InsertFigure` is what adds one.
 
 ## Figure library
 

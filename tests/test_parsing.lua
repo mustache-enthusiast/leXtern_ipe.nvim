@@ -90,4 +90,56 @@ vim.api.nvim_win_set_cursor(0, { 1, 0 })
 lnum = I.insert_at_cursor("Y")
 T.check("insert: non-blank line -> inserted below", lnum == 2 and vim.api.nvim_buf_get_lines(0, 1, 2, false)[1] == "Y")
 
+-- braced_group / command_arg
+T.check("braces: nested groups kept whole", I.braced_group("{a{b}c}rest", 1) == "a{b}c")
+T.check("braces: index past the closing brace", select(2, I.braced_group("{ab}X", 1)) == 5)
+T.check("braces: escaped brace doesn't close the group", I.braced_group("{a\\}b}", 1) == "a\\}b")
+T.check("braces: unclosed group rejected", I.braced_group("{abc", 1) == nil)
+T.check("braces: whitespace before the brace is fine", I.braced_group("  {x}", 1) == "x")
+T.check("braces: other text before the brace is not", I.braced_group("y{x}", 1) == nil)
+T.check("arg: optional argument skipped", I.command_arg("\\includegraphics[width=1cm]{a/b.pdf}", "includegraphics") == "a/b.pdf")
+T.check("arg: no optional argument", I.command_arg("\\label{fig:x}", "label") == "fig:x")
+T.check("arg: longer command name isn't matched", I.command_arg("\\incfiglib{g}{}", "incfig") == nil)
+
+-- normalize_label
+T.check("label: bare name gets the fig: prefix", I.normalize_label("banach") == "fig:banach")
+T.check("label: an existing prefix is kept", I.normalize_label("eq:cauchy") == "eq:cauchy")
+local _, label_err = I.normalize_label("a,b")
+T.check("label: comma refused (it would split a \\cref list)", label_err ~= nil and label_err:find("can't contain", 1, true) ~= nil, label_err)
+T.check("label: brace refused", select(2, I.normalize_label("a{b")) ~= nil)
+
+-- figure_env_lines
+local env = I.figure_env_lines("figs/a", "50\\% of x", "fig:a", "  ")
+T.check("env: placeholders filled, % in the caption untouched",
+  env[4] == "      \\caption{50\\% of x}" and env[3] == "      \\includegraphics[width=0.8\\linewidth]{figs/a.pdf}", env)
+T.check("env: every line indented", env[1] == "  \\begin{figure}[htbp]" and env[6] == "  \\end{figure}", env)
+
+-- the expansion :LabelFigure writes has to match the package's own
+-- \incfig, or a labelled figure would stop looking like its neighbours
+local sty = table.concat(vim.fn.readfile(T.root .. "/templates/lextern-ipe.sty"), "\n")
+local body = sty:match("\\providecommand{\\incfig}%[2%]{%%\n(.-)\n}\n")
+local mirrored = {}
+for line in (body .. "\n"):gmatch("([^\n]*)\n") do
+  line = line:gsub("^    ", "") -- the \providecommand's own indent
+  line = line:gsub("\\lxi@label{#1}", "\\label{LABEL}"):gsub("#1", "PATH"):gsub("#2", "CAPTION")
+  table.insert(mirrored, line)
+end
+T.check("FIGURE_ENV mirrors \\incfig in templates/lextern-ipe.sty",
+  vim.deep_equal(mirrored, I.figure_env), { mirrored, I.figure_env })
+
+-- rewrite_refs
+T.edit_tex("refs.tex", {
+  "\\ref{fig:a} \\autoref{fig:a} \\cref{fig:a,fig:b} \\Cref{fig:ab}",
+  "\\label{fig:a} % \\ref{fig:a}",
+  "\\href{fig:a}{text}",
+})
+local count = I.rewrite_refs("fig:a", "fig:z")
+T.check("refs: every reference family rewritten, \\href left alone", count == 3, count)
+T.check("refs: \\cref list rewritten entry by entry",
+  vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] == "\\ref{fig:z} \\autoref{fig:z} \\cref{fig:z,fig:b} \\Cref{fig:ab}",
+  vim.api.nvim_buf_get_lines(0, 0, 1, false))
+T.check("refs: \\label and comments left alone",
+  vim.api.nvim_buf_get_lines(0, 1, 2, false)[1] == "\\label{fig:a} % \\ref{fig:a}",
+  vim.api.nvim_buf_get_lines(0, 1, 2, false))
+
 T.done()

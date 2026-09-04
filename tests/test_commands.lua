@@ -1,7 +1,7 @@
 -- End to end through the user commands: package generation, :AddFigure
 -- (per-file and --lib), stylesheet embedding, watcher export,
--- :InsertFigure, :DefineIncfig, :StopWatcher, :checkhealth, and -- when
--- pdflatex is available -- compiling the resulting document.
+-- :InsertFigure, :LabelFigure, :DefineIncfig, :StopWatcher, :checkhealth,
+-- and -- when pdflatex is available -- compiling the resulting document.
 
 T.requires("ipetoipe")
 T.stub_ui()
@@ -9,7 +9,7 @@ T.stub_ui()
 local starter = T.root .. "/templates/preamble.isy"
 local M = T.plugin({ stylesheets = { starter } })
 
-for _, c in ipairs({ "AddFigure", "DefineIncfig", "EditFigure", "InsertFigure", "StartWatcher", "StopWatcher", "WatcherStatus" }) do
+for _, c in ipairs({ "AddFigure", "DefineIncfig", "EditFigure", "InsertFigure", "LabelFigure", "StartWatcher", "StopWatcher", "WatcherStatus" }) do
   T.check(":" .. c .. " registered", vim.api.nvim_get_commands({})[c] ~= nil)
 end
 
@@ -27,7 +27,7 @@ T.edit_tex("doc.tex", {
   "\\usepackage{graphicx}",
   "\\begin{document}",
   "",
-  "See \\ref{fig:lib:gamma} and \\ref{fig:doc_figures/alpha-beta}.",
+  "See \\ref{fig:lib:gamma} and \\ref{fig:alpha-beta}.",
   "\\end{document}",
 })
 vim.api.nvim_win_set_cursor(0, { 5, 0 })
@@ -84,6 +84,17 @@ T.check("unrecognized flag warned", T.noted("unrecognized argument: --bogus"))
 T.check("completion: '--l' -> --lib", vim.deep_equal(vim.fn.getcompletion("AddFigure --l", "cmdline"), { "--lib" }))
 T.check("completion: '--x' -> nothing", #vim.fn.getcompletion("AddFigure --x", "cmdline") == 0)
 
+-- :LabelFigure expands the nearest \incfig into a figure environment
+-- carrying the label, and takes the \ref along with it
+vim.api.nvim_win_set_cursor(0, { 6, 0 })
+T.answers.input = "banach"
+T.reset()
+vim.cmd("LabelFigure")
+T.check(":LabelFigure warns about the second reference", T.noted("appears 2 times"), T.notes)
+T.check(":LabelFigure wrote the label", T.buffer():find("\\label{fig:banach}", 1, true) ~= nil, T.buffer())
+T.check(":LabelFigure updated the \\ref", T.buffer():find("\\ref{fig:banach}", 1, true) ~= nil, T.buffer())
+T.check(":LabelFigure left the other \\incfig alone", select(2, T.buffer():gsub("\\incfig{doc_figures/alpha%-beta}{}", "")) == 1)
+
 -- compile the document, if there's a LaTeX
 T.wait_for(function() return M._watchers[T.here .. "/lib/"].exports >= 1 end)
 vim.api.nvim_buf_set_lines(0, -2, -2, false, { "\\incfig{\\incfiglibrary/gamma}{legacy reference}" })
@@ -99,8 +110,9 @@ if vim.fn.executable("pdflatex") == 1 then
   T.check("pdflatex: document compiles against the generated package", vim.v.shell_error == 0, out:match("\n(![^\n]*)") or out:sub(-400))
   local aux = vim.fn.filereadable("doc.aux") == 1 and T.read("doc.aux") or ""
   T.check("pdflatex: fig:lib:gamma label defined", aux:find("\\newlabel{fig:lib:gamma}", 1, true) ~= nil)
-  T.check("pdflatex: per-file label defined", aux:find("\\newlabel{fig:doc_figures/alpha-beta}", 1, true) ~= nil)
-  T.check("pdflatex: legacy \\incfiglibrary reference still works", aux:find("\\newlabel{fig:" .. T.here .. "/lib/gamma}", 1, true) ~= nil)
+  T.check("pdflatex: per-file label defined", aux:find("\\newlabel{fig:alpha-beta}", 1, true) ~= nil)
+  T.check("pdflatex: :LabelFigure label defined", aux:find("\\newlabel{fig:banach}", 1, true) ~= nil)
+  T.check("pdflatex: legacy \\incfiglibrary reference still works", aux:find("\\newlabel{fig:gamma}", 1, true) ~= nil)
 else
   print("SKIP (partial): pdflatex not on PATH, document compile not checked")
 end

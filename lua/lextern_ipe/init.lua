@@ -2,7 +2,8 @@ local M = {}
 
 -- Name of the LaTeX package this plugin generates and manages. Providing
 -- \incfig (as a fallback -- \providecommand, safe even if \incfig is
--- already defined elsewhere), \incfiglib (library figures, labelled
+-- already defined elsewhere; labels a figure fig:<name>, after the last
+-- component of its path), \incfiglib (library figures, labelled
 -- fig:lib:<name>) and \incfiglibrary (the library path). Must be
 -- discoverable by LaTeX via \usepackage, which requires package_dir()
 -- (below) to be on TEXINPUTS -- see :checkhealth lextern_ipe.
@@ -337,20 +338,25 @@ local function strip_comment(line)
   end
 end
 
---- Whether a line looks like a definition of \incfig (as opposed to a
---- usage, e.g. \incfig{foo}{caption}). Comments are ignored, and the
---- name must end at a non-letter so \incfigwide etc. don't match.
-local function line_defines_incfig(line)
+--- Whether a line looks like a definition of \<command> (as opposed
+--- to a usage, e.g. \incfig{foo}{caption}). Comments are ignored, and
+--- the name must end at a non-letter so \incfigwide etc. don't match.
+local function line_defines(line, command)
   line = strip_comment(line)
-  if not line:find("\\incfig%f[^%a]") then
+  if not line:find("\\" .. command .. "%f[^%a]") then
     return false
   end
   return line:find("\\newcommand", 1, true) ~= nil
     or line:find("\\renewcommand", 1, true) ~= nil
     or line:find("\\providecommand", 1, true) ~= nil
-    or line:find("\\def\\incfig", 1, true) ~= nil
+    or line:find("\\def\\" .. command, 1, true) ~= nil
     or line:find("DeclareRobustCommand", 1, true) ~= nil
     or line:find("NewDocumentCommand", 1, true) ~= nil
+end
+
+--- Whether a line looks like a definition of \incfig
+local function line_defines_incfig(line)
+  return line_defines(line, "incfig")
 end
 
 --- Check whether the current buffer already defines \incfig
@@ -762,13 +768,404 @@ local function ensure_library_package()
 end
 
 -- ============================================================
+-- Figure labelling
+-- ============================================================
+
+-- The figure environment \incfig stands for, mirroring the
+-- \providecommand{\incfig} body in templates/lextern-ipe.sty with
+-- PATH/CAPTION/LABEL as placeholders. \incfig derives its label from
+-- the path and takes no say in it, so :LabelFigure gives a figure a
+-- label of the user's choosing by writing this environment out in
+-- full. The two definitions have to stay in step; test_parsing checks
+-- that they do.
+local FIGURE_ENV = {
+  "\\begin{figure}[htbp]",
+  "    \\centering",
+  "    \\includegraphics[width=0.8\\linewidth]{PATH.pdf}",
+  "    \\caption{CAPTION}",
+  "    \\label{LABEL}",
+  "\\end{figure}",
+}
+
+-- How far a single \incfig call, and a figure environment, may span
+-- before the labelling code gives up looking for the end of it
+local CALL_MAX_LINES = 10
+local ENV_MAX_LINES = 40
+
+--- Render FIGURE_ENV with `path`, `caption` and `label` filled in and
+--- every line prefixed with `indent`. Only the placeholders are
+--- substituted, so a caption full of % and \ passes through untouched.
+local function figure_env_lines(path, caption, label, indent)
+  local fill = { PATH = path, CAPTION = caption, LABEL = label }
+  local out = {}
+  for _, template in ipairs(FIGURE_ENV) do
+    table.insert(out, indent .. (template:gsub("%u+", function(key)
+      return fill[key]
+    end)))
+  end
+  return out
+end
+
+--- A figure's name as it appears in a path or a label:
+--- "doc_figures/alpha.pdf" -> "alpha"
+local function figure_name_of(path)
+  return vim.fn.fnamemodify(path, ":t:r")
+end
+
+--- The label \incfig/\incfiglib gives figure `name` on its own -- what
+--- \lxi@label in the package works out, from the basename alone
+local function derived_label(use_library, name)
+  return use_library and ("fig:lib:" .. name) or ("fig:" .. name)
+end
+
+--- Read a balanced {...} group out of `text` starting at `from`, which
+--- must sit on the opening brace bar whitespace. Returns the contents
+--- and the index just past the closing brace, or nil if the group
+--- never opens or never closes. An escaped brace (\{, \}) doesn't
+--- count towards the nesting.
+local function braced_group(text, from)
+  local open = text:find("{", from, true)
+  if not open or not text:sub(from, open - 1):match("^%s*$") then
+    return nil
+  end
+  local depth, i = 0, open
+  while i <= #text do
+    local ch = text:sub(i, i)
+    if ch == "\\" then
+      i = i + 1
+    elseif ch == "{" then
+      depth = depth + 1
+    elseif ch == "}" then
+      depth = depth - 1
+      if depth == 0 then
+        return text:sub(open + 1, i - 1), i + 1
+      end
+    end
+    i = i + 1
+  end
+  return nil
+end
+
+--- The first {...} argument of \<command> in `text` (comments already
+--- stripped), skipping an optional [...] argument. Returns the
+--- argument, the index the command starts at, and the index just past
+--- the argument.
+local function command_arg(text, command, from)
+  local start, name_end = text:find("\\" .. command .. "%f[^%a]", from or 1)
+  if not start then
+    return nil
+  end
+  local rest = name_end + 1
+  if text:find("^%s*%[", rest) then
+    local _, close = text:find("%b[]", rest)
+    if not close then
+      return nil
+    end
+    rest = close + 1
+  end
+  local arg, after = braced_group(text, rest)
+  if not arg then
+    return nil
+  end
+  return arg, start, after
+end
+
+--- Parse the \incfig (or \incfiglib) call that starts on buffer line
+--- `lnum`. Returns { path, caption, indent, comments, first, last } --
+--- `last` being the line its second argument closes on -- or nil plus
+--- a reason. The call has to occupy its lines alone, leading
+--- whitespace and comments aside: :LabelFigure replaces those whole
+--- lines with a figure environment, and anything else sharing them
+--- would be lost.
+local function parse_incfig_call(lnum, command)
+  local raw = vim.api.nvim_buf_get_lines(0, lnum - 1, lnum - 1 + CALL_MAX_LINES, false)
+  local code, starts, offset = {}, {}, 1
+  for i, line in ipairs(raw) do
+    code[i] = strip_comment(line)
+    starts[i] = offset
+    offset = offset + #code[i] + 1
+  end
+  local text = table.concat(code, "\n")
+
+  local function line_of(pos)
+    local found = 1
+    for i, from in ipairs(starts) do
+      if from <= pos then
+        found = i
+      end
+    end
+    return found
+  end
+
+  local path, start, after = command_arg(text, command)
+  if not path then
+    return nil, string.format("line %d: couldn't read the argument of \\%s", lnum, command)
+  end
+  if not text:sub(1, start - 1):match("^%s*$") then
+    return nil, string.format("line %d: \\%s shares its line with other text", lnum, command)
+  end
+  local caption, done = braced_group(text, after)
+  if not caption then
+    return nil, string.format("line %d: \\%s has no caption argument", lnum, command)
+  end
+
+  local last = line_of(done - 1)
+  if not code[last]:sub(done - starts[last] + 1):match("^%s*$") then
+    return nil, string.format("line %d: \\%s shares its line with other text", lnum, command)
+  end
+
+  -- Comments anywhere in the call are kept, moved above the
+  -- environment that replaces it -- dropping the user's text would be
+  -- a poor trade for a tidier line.
+  local comments = {}
+  for i = 1, last do
+    local comment = raw[i]:sub(#code[i] + 1)
+    if comment ~= "" then
+      table.insert(comments, comment)
+    end
+  end
+
+  return {
+    path = path,
+    caption = caption,
+    indent = code[1]:match("^%s*"),
+    comments = comments,
+    first = lnum,
+    last = lnum + last - 1,
+  }
+end
+
+--- The figure environment around the \includegraphics on line `lnum`:
+--- its first and last lines, and its \label and \caption lines if it
+--- has them. Returns nil when there's no \begin{figure}...\end{figure}
+--- within ENV_MAX_LINES either way -- a loose \includegraphics is not
+--- something :LabelFigure can label.
+local function figure_env_at(lnum)
+  local from = math.max(1, lnum - ENV_MAX_LINES)
+  local to = math.min(vim.api.nvim_buf_line_count(0), lnum + ENV_MAX_LINES)
+  local lines = vim.api.nvim_buf_get_lines(0, from - 1, to, false)
+  local at = lnum - from + 1
+
+  local first, last
+  for i = at, 1, -1 do
+    local line = strip_comment(lines[i])
+    if line:find("\\begin{figure}", 1, true) then
+      first = i
+      break
+    elseif i ~= at and line:find("\\end{figure}", 1, true) then
+      break
+    end
+  end
+  for i = at, #lines do
+    local line = strip_comment(lines[i])
+    if line:find("\\end{figure}", 1, true) then
+      last = i
+      break
+    elseif i ~= at and line:find("\\begin{figure}", 1, true) then
+      break
+    end
+  end
+  if not first or not last then
+    return nil
+  end
+
+  local env = { first = first + from - 1, last = last + from - 1 }
+  for i = first, last do
+    local line = strip_comment(lines[i])
+    if not env.label and line:find("\\label%f[^%a]") then
+      env.label = command_arg(line, "label")
+      env.label_lnum = i + from - 1
+      env.label_indent = line:match("^%s*")
+    end
+    if not env.caption_lnum and line:find("\\caption%f[^%a]") then
+      env.caption_lnum = i + from - 1
+    end
+  end
+  return env
+end
+
+--- Whether `path`, as written inside \includegraphics, points at
+--- figure `name` on the side being labelled -- the shared library or
+--- the document's own figures dir. Keeps :LabelFigure from picking up
+--- a library figure that happens to share a name with a local one.
+local function path_is_figure(path, use_library, name)
+  if figure_name_of(path) ~= name then
+    return false
+  end
+  local dir = path:match("^(.*)/[^/]*$") or ""
+  local library = resolved_library_dir()
+  local in_library = dir:find("\\incfiglibrary", 1, true) ~= nil
+    or (library ~= "" and dir:find(library, 1, true) ~= nil)
+  return in_library == (use_library and true or false)
+end
+
+--- Every place in the buffer that includes figure `name`: an
+--- \incfig/\incfiglib call, or a figure environment a previous
+--- :LabelFigure expanded. Returns the sites plus, for a call that
+--- couldn't be parsed, the reason -- "no \incfig line" is a poor
+--- report when the line is right there but unlabellable.
+local function find_figure_sites(use_library, name)
+  local command = use_library and "incfiglib" or "incfig"
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local sites, problem = {}, nil
+
+  local lnum = 1
+  while lnum <= #lines do
+    local raw = lines[lnum]
+    local code = strip_comment(raw)
+    local consumed = lnum
+    if code:find("\\" .. command .. "%f[^%a]") and not line_defines(raw, command) then
+      local call, err = parse_incfig_call(lnum, command)
+      if call and figure_name_of(call.path) == name then
+        table.insert(sites, {
+          kind = "call",
+          lnum = call.first,
+          call = call,
+          label = derived_label(use_library, name),
+          gfx_path = use_library and ("\\incfiglibrary/" .. call.path) or call.path,
+        })
+        consumed = call.last
+      elseif not call and code:find(name, 1, true) then
+        problem = problem or err
+      end
+    elseif code:find("\\includegraphics%f[^%a]") then
+      local path = command_arg(code, "includegraphics")
+      if path and path_is_figure(path, use_library, name) then
+        local env = figure_env_at(lnum)
+        if env then
+          table.insert(sites, {
+            kind = "env",
+            lnum = env.first,
+            env = env,
+            label = env.label,
+          })
+          consumed = env.last
+        end
+      end
+    end
+    lnum = consumed + 1
+  end
+
+  return sites, problem
+end
+
+--- The site closest to the cursor, so a document referencing the same
+--- figure twice relabels the one being looked at
+local function nearest_site(sites, row)
+  local best = sites[1]
+  for _, site in ipairs(sites) do
+    if math.abs(site.lnum - row) < math.abs(best.lnum - row) then
+      best = site
+    end
+  end
+  return best
+end
+
+--- Turn what the user typed into a label: a bare "banach" becomes
+--- "fig:banach", while anything already carrying a prefix ("eq:cauchy")
+--- is taken as written. Returns the label or nil + error message.
+local function normalize_label(input)
+  local bad = input:match("[{}%%\\#,]")
+  if bad then
+    return nil, string.format("A label can't contain %s -- got %q", bad, input)
+  end
+  if input:find(":", 1, true) then
+    return input
+  end
+  return "fig:" .. input
+end
+
+--- Whether a \label elsewhere in the buffer already uses `label`
+--- (`skip` being the line the new one is going on)
+local function label_used_elsewhere(label, skip)
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  for i, raw in ipairs(lines) do
+    if i ~= skip and command_arg(strip_comment(raw), "label") == label then
+      return true
+    end
+  end
+  return false
+end
+
+--- Write `label` into `site`, either rewriting the \label of an
+--- already-expanded figure environment or expanding an \incfig call
+--- into one. Returns the line the \label ended up on.
+local function apply_label(site, label)
+  if site.kind == "env" then
+    local env = site.env
+    if env.label_lnum then
+      local line = env.label_indent .. "\\label{" .. label .. "}"
+      vim.api.nvim_buf_set_lines(0, env.label_lnum - 1, env.label_lnum, false, { line })
+      return env.label_lnum
+    end
+    -- No \label of its own yet: after the caption, or failing that as
+    -- the last thing in the environment.
+    local at = env.caption_lnum or (env.last - 1)
+    local indent = vim.api.nvim_buf_get_lines(0, at - 1, at, false)[1]:match("^%s*")
+    vim.api.nvim_buf_set_lines(0, at, at, false, { indent .. "\\label{" .. label .. "}" })
+    return at + 1
+  end
+
+  local call = site.call
+  local lines = {}
+  for _, comment in ipairs(call.comments) do
+    table.insert(lines, call.indent .. comment)
+  end
+  local env = figure_env_lines(site.gfx_path, call.caption, label, call.indent)
+  vim.list_extend(lines, env)
+  vim.api.nvim_buf_set_lines(0, call.first - 1, call.last, false, lines)
+  -- \label is the second-to-last line of FIGURE_ENV
+  return call.first + #lines - 2
+end
+
+--- Point every \ref-family reference to `old` at `new`, and report how
+--- many changed. Comments are left alone, and so is the label itself
+--- (\label doesn't end in "ref"); the comma-separated lists \cref and
+--- friends accept are rewritten entry by entry. \href is the one
+--- command ending in "ref" that takes a URL rather than a label.
+local function rewrite_refs(old, new)
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local total = 0
+  for i, raw in ipairs(lines) do
+    local code = strip_comment(raw)
+    local comment = raw:sub(#code + 1)
+    local changed = 0
+    local updated = code:gsub("(\\[%a@]*ref%*?)(%b{})", function(command, group)
+      if command == "\\href" then
+        return nil
+      end
+      local names = vim.split(group:sub(2, -2), ",", { plain = true })
+      local hit = false
+      for j, name in ipairs(names) do
+        if vim.trim(name) == old then
+          names[j] = new
+          hit = true
+          changed = changed + 1
+        end
+      end
+      if not hit then
+        return nil
+      end
+      return command .. "{" .. table.concat(names, ",") .. "}"
+    end)
+    if changed > 0 then
+      vim.api.nvim_buf_set_lines(0, i - 1, i, false, { updated .. comment })
+      total = total + changed
+    end
+  end
+  return total
+end
+
+-- ============================================================
 -- User prompts
 -- ============================================================
 
---- Prompt for text input. Calls callback(result) with the entered
---- string, or callback(nil) if cancelled/empty.
-local function ui_input(prompt, callback)
-  vim.ui.input({ prompt = prompt .. ": " }, function(result)
+--- Prompt for text input, optionally prefilled with `default` (for
+--- editing something that already exists, e.g. a figure's label).
+--- Calls callback(result) with the entered string, or callback(nil) if
+--- cancelled/empty.
+local function ui_input(prompt, callback, default)
+  vim.ui.input({ prompt = prompt .. ": ", default = default }, function(result)
     if not result or vim.trim(result) == "" then
       callback(nil)
       return
@@ -1283,6 +1680,89 @@ function M.insert_figure(use_library)
   end)
 end
 
+--- Give a figure a label of your own choosing: \ref{fig:banach} rather
+--- than \ref{fig:diagram-3}. \incfig derives its label from the path
+--- and takes no argument for one, so the call is expanded into the
+--- figure environment it stands for, with the label written out in
+--- full; relabelling an already-expanded figure just rewrites its
+--- \label. Either way, references to the old label in this buffer
+--- follow the rename. The figure has to be included in this buffer
+--- already -- :InsertFigure is what adds one.
+function M.label_figure(use_library)
+  local ok_buf, buf_err = check_tex_buffer()
+  if not ok_buf then
+    vim.notify(buf_err, vim.log.levels.ERROR)
+    return
+  end
+
+  local dir, figures = list_target_figures(use_library)
+  if not dir then
+    return
+  end
+
+  ui_select(figures, use_library and "Label library figure" or "Label figure", function(selected)
+    if not selected then
+      return
+    end
+
+    local sites, problem = find_figure_sites(use_library, selected)
+    if #sites == 0 then
+      vim.notify(problem or string.format(
+        "%s isn't included in this buffer yet (:InsertFigure adds it)", selected
+      ), vim.log.levels.ERROR)
+      return
+    end
+
+    local site = nearest_site(sites, vim.api.nvim_win_get_cursor(0)[1])
+    if #sites > 1 then
+      vim.notify(string.format(
+        "%s appears %d times in this buffer; labelling the one on line %d (move the cursor to pick another)",
+        selected, #sites, site.lnum
+      ), vim.log.levels.WARN)
+    end
+
+    local current = site.label or derived_label(use_library, selected)
+    ui_input("Label", function(input)
+      if not input then
+        return
+      end
+
+      local label, err = normalize_label(input)
+      if not label then
+        vim.notify(err, vim.log.levels.ERROR)
+        return
+      end
+      if label == site.label then
+        vim.notify(string.format("%s is already labelled %s", selected, label), vim.log.levels.INFO)
+        return
+      end
+      if label_used_elsewhere(label, site.kind == "env" and site.env.label_lnum or nil) then
+        vim.notify(string.format(
+          "%s is already used by another \\label; LaTeX will report it as multiply defined", label
+        ), vim.log.levels.WARN)
+      end
+
+      -- The expansion of a library figure references \incfiglibrary,
+      -- which only the package defines.
+      if use_library and site.kind == "call" then
+        ensure_library_package()
+      end
+
+      local lnum = apply_label(site, label)
+      vim.api.nvim_win_set_cursor(0, { lnum, 0 })
+
+      -- Only rewrite references when the figure really had a label to
+      -- rename: an expanded environment with no \label of its own had
+      -- none, whatever \incfig would have derived.
+      local refs = site.label and rewrite_refs(site.label, label) or 0
+      vim.notify(string.format(
+        "Labelled %s as %s%s", selected, label,
+        refs > 0 and string.format(" (%d reference%s updated)", refs, refs == 1 and "" or "s") or ""
+      ), vim.log.levels.INFO)
+    end, current)
+  end)
+end
+
 --- Ensure \usepackage{lextern-ipe} is present (providing \incfig as a
 --- fallback and \incfiglibrary). By default it's placed right after
 --- the last \usepackage line, falling back to right after
@@ -1324,6 +1804,13 @@ end
 M._internal = {
   strip_comment = strip_comment,
   line_defines_incfig = line_defines_incfig,
+  braced_group = braced_group,
+  command_arg = command_arg,
+  figure_env = FIGURE_ENV,
+  figure_env_lines = figure_env_lines,
+  normalize_label = normalize_label,
+  rewrite_refs = rewrite_refs,
+  find_figure_sites = find_figure_sites,
   extract_arg_names = extract_arg_names,
   end_of_command = end_of_command,
   incfig_is_defined = incfig_is_defined,

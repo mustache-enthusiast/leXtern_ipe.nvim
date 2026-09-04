@@ -58,6 +58,14 @@ cmd("InsertFigure", function(opts)
   require("lextern_ipe").insert_figure(flags["--lib"])
 end, { nargs = "*", complete = flag_complete({ "--lib" }) })
 
+-- :LabelFigure replaces a figure's path-derived label (fig:<name>)
+-- with one of your own, expanding the \incfig call into the figure
+-- environment it stands for so the \label can be written out.
+cmd("LabelFigure", function(opts)
+  local flags = parse_flags("LabelFigure", opts.fargs, { "--lib" })
+  require("lextern_ipe").label_figure(flags["--lib"])
+end, { nargs = "*", complete = flag_complete({ "--lib" }) })
+
 cmd("StartWatcher", function()
   require("lextern_ipe").start_watcher()
 end)
