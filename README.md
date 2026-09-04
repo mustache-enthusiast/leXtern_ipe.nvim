@@ -1,9 +1,9 @@
 # leXtern_ipe.nvim
 
 Draw [Ipe](https://ipe.otfried.org/) figures for LaTeX documents without
-leaving Neovim. One command creates the figure, drops an `\incfig` line at
-the cursor, and opens Ipe; every save in Ipe exports the PDF, so
-`latexmk -pvc` picks it up immediately.
+leaving Neovim. One command creates the figure, drops a labelled `figure`
+environment at the cursor, and opens Ipe; every save in Ipe exports the PDF,
+so `latexmk -pvc` picks it up immediately.
 
 > **Disclosure:** this plugin was built with AI assistance (Claude Code). The
 > design, review, and testing were directed by a human; the commit history
@@ -15,8 +15,8 @@ the cursor, and opens Ipe; every save in Ipe exports the PDF, so
 - [Ipe](https://ipe.otfried.org/) 7.2 or newer, with `ipe` and `ipetoipe` on
   `PATH`
 - A TeX distribution. `kpsewhich` (part of any) is optional but recommended;
-  it lets the plugin see `\incfig` definitions inside your document class or
-  packages.
+  it lets the plugin see that your document class or packages already load
+  `graphicx`.
 
 Prompts use `vim.ui.input` and `vim.ui.select`, so a UI provider such as
 [dressing.nvim](https://github.com/stevearc/dressing.nvim) or
@@ -43,8 +43,10 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 }
 ```
 
-Then, once, add the plugin's generated LaTeX package to `TEXINPUTS` in your
-shell profile (details under [LaTeX setup](#latex-setup)):
+Your documents need `\usepackage{graphicx}`, which the plugin offers to add
+when it isn't there. That's all, unless you want the shared
+[figure library](#figure-library) — that one needs the plugin's generated
+LaTeX package on `TEXINPUTS`, added once in your shell profile:
 
 ```sh
 export TEXINPUTS="$HOME/.local/share/nvim/lextern_ipe//:$TEXINPUTS"
@@ -57,14 +59,25 @@ your configuration.
 
 1. Open `notes.tex` and run `:AddFigure`.
 2. Enter a name, say `Free Body Diagram`.
-3. The plugin creates `notes_figures/free-body-diagram.ipe`, inserts
-   `\incfig{notes_figures/free-body-diagram}{}` at the cursor, exports an
-   empty PDF so the document already compiles, and opens Ipe. If `\incfig`
-   isn't defined yet it offers to add `\usepackage{lextern-ipe}` first.
+3. The plugin creates `notes_figures/free-body-diagram.ipe`, inserts this
+   at the cursor, exports an empty PDF so the document already compiles,
+   and opens Ipe:
+
+   ```latex
+   \begin{figure}[htbp]
+       \centering
+       \includegraphics[width=0.8\linewidth]{notes_figures/free-body-diagram.pdf}
+       \caption{}
+       \label{fig:free-body-diagram}
+   \end{figure}
+   ```
+
+   If `\includegraphics` isn't available yet it offers to add
+   `\usepackage{graphicx}` first.
 4. Draw. Each save in Ipe re-exports the PDF.
 5. Back in Neovim the cursor is on the caption's closing brace, so `i` types
-   straight into it. The figure is `\ref{fig:free-body-diagram}`, or
-   whatever you rename it to with `:LabelFigure`.
+   straight into it. Everything about the figure is right there in the
+   document — change the width, the placement, the label.
 
 Figures live in `<document>_figures/` next to the `.tex` file, so a document
 and its figures move together. Figures shared between documents go in the
@@ -74,9 +87,9 @@ and its figures move together. Figures shared between documents go in the
 
 | Command | Action |
 |---|---|
-| `:AddFigure` | Prompt for a name, create the figure, insert `\incfig`, open Ipe, start the watcher |
+| `:AddFigure` | Prompt for a name, create the figure, insert its `figure` environment, open Ipe, start the watcher |
 | `:EditFigure` | Pick an existing figure and open it in Ipe |
-| `:InsertFigure` | Pick an existing figure and insert its `\incfig` at the cursor |
+| `:InsertFigure` | Pick an existing figure and insert its `figure` environment at the cursor |
 | `:LabelFigure` | Pick a figure and give it a `\label` of your own, updating references to the old one |
 | `:DefineIncfig` | Insert `\usepackage{lextern-ipe}` after the last `\usepackage` (or after `\documentclass`, or at the cursor) |
 | `:StartWatcher` | Start the PDF export watcher for this document's figures dir |
@@ -97,8 +110,8 @@ require("lextern_ipe").setup({
   -- Create a missing figures directory: "ask", "always", "never"
   dir_create_mode = "ask",
 
-  -- Prompt before inserting \usepackage{lextern-ipe} when \incfig isn't
-  -- defined (:AddFigure/:InsertFigure): "ask", "always", "never"
+  -- Prompt before inserting \usepackage{graphicx} when \includegraphics
+  -- isn't available (:AddFigure/:InsertFigure): "ask", "always", "never"
   confirm_missing_preamble = "ask",
 
   -- Prompt before :DefineIncfig inserts a second definition
@@ -116,8 +129,8 @@ require("lextern_ipe").setup({
   stylesheets = {},
 
   -- How far to follow \RequirePackage/\usepackage chains when checking
-  -- whether \incfig is defined by a loaded class or package (kpsewhich).
-  -- 2 finds \RequirePackage{lextern-ipe} inside a custom class; 0 checks
+  -- whether a loaded class or package brings in graphicx (kpsewhich).
+  -- 2 finds \RequirePackage{graphicx} inside a custom class; 0 checks
   -- only the buffer text.
   kpsewhich_depth = 2,
 
@@ -138,122 +151,105 @@ names it doesn't recognize.
 
 ## LaTeX setup
 
-`setup()` generates a small package, `lextern-ipe.sty`, in
-`stdpath("data")/lextern_ipe/`. It provides:
+A figure this plugin inserts is an ordinary `figure` environment, so a
+document needs one thing: `\usepackage{graphicx}`.
 
-- `\incfig{path}{caption}`: a centered `figure` with
-  `\includegraphics[width=0.8\linewidth]{path.pdf}`, labelled `fig:name`
-  after the last path component — `\incfig{notes_figures/flux}{}` is
-  `\ref{fig:flux}`. Defined with `\providecommand`, so your own definition
-  wins if you have one.
-- `\incfiglib{name}{caption}`: the same for a [library](#figure-library)
-  figure, labelled `fig:lib:name`.
+Before inserting, the plugin looks for it in the buffer and, via
+`kpsewhich`, inside any class or package the document loads, following
+`\RequirePackage` chains up to `kpsewhich_depth` levels. Comments are
+ignored. If it can't find it, it offers to add the line — it's a heuristic,
+so declining the prompt is a legitimate answer.
 
-The directory is left out of the label deliberately: every `\incfig` in a
-document draws from that document's own `<basename>_figures/`, so the path
-would disambiguate nothing. `:LabelFigure` replaces the derived label
-with one of your own — see [Labels](#labels).
+Figures are labelled after their name: `notes_figures/flux.ipe` is
+`\ref{fig:flux}`, and a library figure `gamma` is `\ref{fig:lib:gamma}`. The
+label lives in the document, so you can change it — see [Labels](#labels).
 
-> **Upgrading:** labels used to include the directory
-> (`fig:notes_figures/flux`). If you have documents written against that,
-> either update their `\ref`s or keep the old scheme with your own
-> `\newcommand{\incfig}` — see below.
+### The generated package
 
-The `TEXINPUTS` line from [Installation](#installation) is what lets
+`setup()` also generates a small package, `lextern-ipe.sty`, in
+`stdpath("data")/lextern_ipe/`. Only [library](#figure-library) figures need
+it, for `\incfiglibrary`; a document's own figures need nothing from it. The
+`TEXINPUTS` line from [Installation](#installation) is what lets
 `\usepackage{lextern-ipe}` find it. If your `stdpath("data")` isn't
 `~/.local/share/nvim`, adjust the path (`:lua print(vim.fn.stdpath("data"))`).
 `:checkhealth` confirms the package resolves.
 
-**How the check works.** Before inserting an `\incfig` line, the plugin
-looks for a definition in the buffer, in `\usepackage{lextern-ipe}`, and,
-via `kpsewhich`, inside any class or package the document loads, following
-`\RequirePackage` chains up to `kpsewhich_depth` levels. Comments are
-ignored. It's a heuristic, so declining the prompt is a legitimate answer.
+It also defines two macros the plugin no longer inserts, kept so that
+documents written against them keep compiling:
 
-**Defining `\incfig` yourself.** If you'd rather not touch `TEXINPUTS`, put
-this in your preamble or class instead. The plugin only checks that
-`\incfig` exists, never how it's defined. This does opt out of the library,
-which needs `\incfiglib` from the package. The version below labels by
-path, `fig:notes_figures/flux`; `:LabelFigure` works either way, since it
-writes the label out in full.
+- `\incfig{path}{caption}`: the same `figure` environment, labelled
+  `fig:name` after the last path component.
+- `\incfiglib{name}{caption}`: the same for a library figure, labelled
+  `fig:lib:name`.
 
-```latex
-\usepackage{graphicx}
-\newcommand{\incfig}[2]{%
-    \begin{figure}[htbp]
-        \centering
-        \includegraphics[width=0.8\linewidth]{#1.pdf}
-        \caption{#2}
-        \label{fig:#1}
-    \end{figure}
-}
-```
+`:LabelFigure` expands an `\incfig` call into the environment it stands for,
+which is how you migrate one when you want to change its label.
+
+> **Upgrading:** two things changed. Figures are now inserted as `figure`
+> environments rather than `\incfig` lines, and labels no longer include the
+> directory (`fig:notes_figures/flux` is now `fig:flux`). Existing documents
+> keep working — `\incfig` is still defined — but their labels change with
+> the package, so either update those `\ref`s or pin the old scheme with your
+> own `\newcommand{\incfig}`:
+>
+> ```latex
+> \usepackage{graphicx}
+> \newcommand{\incfig}[2]{%
+>     \begin{figure}[htbp]
+>         \centering
+>         \includegraphics[width=0.8\linewidth]{#1.pdf}
+>         \caption{#2}
+>         \label{fig:#1}
+>     \end{figure}
+> }
+> ```
 
 ## Labels
 
-`\incfig` works its label out from the path, which is fine until it isn't:
-`\ref{fig:diagram-3}` says nothing about what the diagram is. `:LabelFigure`
-picks a figure the same way `:EditFigure` does, asks for a label, and gives
-the figure that one instead.
-
-The macro takes no label argument — it can't, without breaking every
-document that defines its own `\incfig` — so the call is expanded into the
-figure environment it stood for, with the `\label` written out:
-
-```latex
-\incfig{notes_figures/flux}{Flux through a closed surface}
-```
-
-becomes
-
-```latex
-\begin{figure}[htbp]
-    \centering
-    \includegraphics[width=0.8\linewidth]{notes_figures/flux.pdf}
-    \caption{Flux through a closed surface}
-    \label{fig:gauss}
-\end{figure}
-```
-
-That environment is exactly what `\incfig` expands to, so nothing about the
-figure changes except the label. Everything else follows:
+Figures are labelled after their name, which is usually what you want and
+occasionally isn't: `\ref{fig:diagram-3}` says nothing about what the diagram
+is. `:LabelFigure` picks a figure the same way `:EditFigure` does, asks for a
+label, and rewrites the figure's `\label` to that.
 
 - A bare name gets the `fig:` prefix (`gauss` → `fig:gauss`); anything with
   a prefix of its own (`eq:gauss`) is taken as written.
 - `\ref`, `\autoref`, `\cref` and friends pointing at the old label are
   updated in the current buffer, including inside `\cref{a,b}` lists. Other
   files in a multi-file project are not touched.
-- Run it again on an expanded figure and it just rewrites the `\label`;
-  the environment isn't expanded twice.
-- Indentation and any comments on the `\incfig` line are kept.
 - If a document includes the same figure twice, the one nearest the cursor
-  is labelled, and you're told about the other.
+  is labelled, and you're told about the other. (Inserting a figure twice
+  gives both copies the same label, which `:LabelFigure` is how you fix; the
+  plugin says so at the time.)
 - A label already used by another `\label` is a warning, not a refusal.
 
-`:LabelFigure` only labels a figure the buffer already includes —
-`:InsertFigure` is what adds one.
+Run on a legacy `\incfig{path}{caption}` line, it expands the call into the
+figure environment it stands for, with the label written out, keeping the
+caption, the indentation and any comment on the line.
 
 ## Figure library
 
 One shared directory, `library_dir`, for figures reused across documents.
-Add `--lib` to `:AddFigure`, `:EditFigure`, or `:InsertFigure` to target it.
+Add `--lib` to `:AddFigure`, `:EditFigure`, `:InsertFigure`, or
+`:LabelFigure` to target it.
 
-Library figures are referenced by name, `\incfiglib{name}{caption}`, and
-labelled `fig:lib:name`. The package defines `\incfiglib` in terms of
-`\incfiglibrary`, which `setup()` sets to your current `library_dir`, so
-moving the library is a config change rather than an edit to every document.
-`\renewcommand{\incfiglib}` in your preamble to change the layout.
+A library figure is included through `\incfiglibrary`, which `setup()` sets
+to your current `library_dir`, so moving the library is a config change
+rather than an edit to every document. It's labelled `fig:lib:name`, keeping
+it distinct from a document's own figure of the same name:
 
 ```latex
-\newcommand{\incfiglib}[2]{%
-    \begin{figure}[htbp]
-        \centering
-        \includegraphics[width=0.8\linewidth]{\incfiglibrary/#1.pdf}
-        \caption{#2}
-        \label{fig:lib:#1}
-    \end{figure}
-}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.8\linewidth]{\incfiglibrary/gamma.pdf}
+    \caption{}
+    \label{fig:lib:gamma}
+\end{figure}
 ```
+
+`\incfiglibrary` is the one thing a document does need from the generated
+package, so `--lib` commands offer to add `\usepackage{lextern-ipe}` when
+it isn't loaded (`confirm_missing_library_package`), and this is what the
+`TEXINPUTS` line from [Installation](#installation) is for.
 
 ## Figure stylesheets
 

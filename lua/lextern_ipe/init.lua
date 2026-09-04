@@ -9,6 +9,11 @@ local M = {}
 -- (below) to be on TEXINPUTS -- see :checkhealth lextern_ipe.
 local PACKAGE_NAME = "lextern-ipe"
 
+-- The LaTeX package a figure environment actually needs: \includegraphics
+-- with key-value options. The generated package requires it too, so
+-- \usepackage{lextern-ipe} satisfies this on its own.
+local GRAPHICS_PACKAGE = "graphicx"
+
 -- ============================================================
 -- Configuration
 -- ============================================================
@@ -32,10 +37,12 @@ M.config = {
   -- kpsewhich isn't found.
   kpsewhich_depth = 2,
 
-  -- Whether :AddFigure/:InsertFigure prompt before auto-inserting the
-  -- \incfig preamble when it can't find a definition:
-  -- "ask" (prompt every time, default), "always" (insert without
-  -- asking), "never" (skip silently -- no prompt, no insert)
+  -- Whether :AddFigure/:InsertFigure prompt before auto-inserting
+  -- \usepackage{graphicx} when they can't find \includegraphics
+  -- available (\usepackage{lextern-ipe} instead, for --lib -- see
+  -- confirm_missing_library_package): "ask" (prompt every time,
+  -- default), "always" (insert without asking), "never" (skip
+  -- silently -- no prompt, no insert)
   confirm_missing_preamble = "ask",
 
   -- Whether :DefineIncfig prompts before inserting a second \incfig
@@ -544,31 +551,38 @@ local function has_incfig_in_loaded_packages()
   end)
 end
 
---- Check whether the current buffer loads this plugin's generated
---- lextern-ipe.sty (\usepackage{lextern-ipe}), which provides both
---- \incfig (as a fallback) and \incfiglibrary. Buffer-text only, no
---- kpsewhich -- a fast path for the common case (this plugin inserted
---- \usepackage{lextern-ipe} directly into the buffer) that also works
---- without kpsewhich installed.
-local function has_lextern_ipe_package_loaded()
+--- Check whether the current buffer loads package `name` by
+--- \usepackage or \RequirePackage. Buffer-text only, no kpsewhich --
+--- a fast path for the common case (the package is named right there
+--- in the preamble) that also works without kpsewhich installed.
+local function has_package_loaded(name)
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
   for _, line in ipairs(lines) do
-    for _, name in ipairs(extract_arg_names(line, "usepackage")) do
-      if name == PACKAGE_NAME then
-        return true
+    for _, command in ipairs({ "usepackage", "RequirePackage" }) do
+      for _, loaded in ipairs(extract_arg_names(line, command)) do
+        if loaded == name then
+          return true
+        end
       end
     end
   end
   return false
 end
 
+--- Whether the buffer loads this plugin's generated lextern-ipe.sty,
+--- which provides \incfiglibrary (and \incfig/\incfiglib, and
+--- graphicx)
+local function has_lextern_ipe_package_loaded()
+  return has_package_loaded(PACKAGE_NAME)
+end
+
 --- Buffer-local memo for the (kpsewhich-backed, hence slow) checks
 --- below, keyed on b:changedtick: both positive *and* negative results
 --- are reused until the buffer is edited. Negative caching matters --
---- when \incfig genuinely isn't defined yet, ensure_incfig_preamble
---- and define_incfig both check within one :AddFigure, and each
---- :AddFigure --lib adds a third check; without it every one of those
---- re-ran the full walk.
+--- when the preamble genuinely is missing, a single :AddFigure runs
+--- the same check more than once (the ensure_* prompt, then
+--- define_incfig's own duplicate check), and without it every one of
+--- those re-ran the full walk.
 local function cached_check(key, compute)
   local tick = vim.b.changedtick
   local cache = vim.b[key]
@@ -587,6 +601,27 @@ end
 local function incfig_is_defined()
   return cached_check("lextern_ipe_incfig_check", function()
     return has_incfig_defined() or has_lextern_ipe_package_loaded() or has_incfig_in_loaded_packages()
+  end)
+end
+
+--- Check whether \includegraphics with key-value options is available:
+--- graphicx loaded in the buffer, this plugin's package (which
+--- requires it), or either of those pulled in by a loaded
+--- class/package. This is what an inserted figure environment needs --
+--- the environment is written out in full, so nothing else about the
+--- preamble matters. As heuristic as the rest: a class that loads
+--- graphicx more \RequirePackage hops down than kpsewhich_depth
+--- allows won't be found, so declining the prompt is a legitimate
+--- answer. Cached per buffer until the next edit.
+local function graphicx_is_available()
+  return cached_check("lextern_ipe_graphicx_check", function()
+    if has_package_loaded(GRAPHICS_PACKAGE) or has_lextern_ipe_package_loaded() then
+      return true
+    end
+    local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+    return walk_kpsewhich_packages(lines, function(stem)
+      return stem == GRAPHICS_PACKAGE or stem == PACKAGE_NAME
+    end)
   end)
 end
 
@@ -668,25 +703,14 @@ local function insert_at_cursor(text)
   return last
 end
 
---- Insert \usepackage{lextern-ipe} (providing \incfig as a fallback
---- and \incfiglibrary). Placed right after the last \usepackage,
+--- Insert \usepackage{<name>} right after the last \usepackage,
 --- falling back to right after \documentclass, falling back to cursor
 --- position; pass at_cursor=true to always insert at the cursor
 --- instead. No presence/duplicate checks of its own -- callers
---- (M.define_incfig, ensure_library_package) apply their own, distinct
---- checks before calling this.
-local function insert_package_usepackage(at_cursor)
-  local line = string.format("\\usepackage{%s}", PACKAGE_NAME)
-
-  -- Make sure the package we're about to reference actually exists --
-  -- it's normally generated by setup(), but the commands work without
-  -- setup() ever having been called.
-  if vim.fn.filereadable(package_dir() .. "/" .. PACKAGE_NAME .. ".sty") == 0 then
-    local ok, err = write_package_file()
-    if not ok then
-      vim.notify("lextern_ipe: failed to write " .. PACKAGE_NAME .. ".sty: " .. err, vim.log.levels.ERROR)
-    end
-  end
+--- (M.define_incfig, ensure_library_package, ensure_graphicx_preamble)
+--- apply their own, distinct checks before calling this.
+local function insert_usepackage(name, at_cursor)
+  local line = string.format("\\usepackage{%s}", name)
 
   if at_cursor then
     insert_at_cursor(line)
@@ -707,14 +731,32 @@ local function insert_package_usepackage(at_cursor)
   vim.api.nvim_buf_set_lines(0, anchor, anchor, false, { line })
 end
 
---- Warn and offer to insert the \incfig preamble if it doesn't appear
---- to be defined yet (checking the buffer and any resolvable loaded
---- class/package). This is still a heuristic -- e.g. a package that
---- itself requires another package defining \incfig won't be found --
---- so declining is a legitimate choice, not just a dismissal. Governed
---- by config.confirm_missing_preamble ("ask"/"always"/"never").
-local function ensure_incfig_preamble()
-  if incfig_is_defined() then
+--- Insert \usepackage{lextern-ipe}, generating the package file first
+--- if it isn't there. Anchored as insert_usepackage.
+local function insert_package_usepackage(at_cursor)
+  -- Make sure the package we're about to reference actually exists --
+  -- it's normally generated by setup(), but the commands work without
+  -- setup() ever having been called.
+  if vim.fn.filereadable(package_dir() .. "/" .. PACKAGE_NAME .. ".sty") == 0 then
+    local ok, err = write_package_file()
+    if not ok then
+      vim.notify("lextern_ipe: failed to write " .. PACKAGE_NAME .. ".sty: " .. err, vim.log.levels.ERROR)
+    end
+  end
+
+  insert_usepackage(PACKAGE_NAME, at_cursor)
+end
+
+--- Warn and offer to insert \usepackage{graphicx} if \includegraphics
+--- doesn't appear to be available (checking the buffer and any
+--- resolvable loaded class/package). That is the whole preamble an
+--- inserted figure needs: the environment is written out in full, so
+--- the document needs no macro from this plugin -- only a library
+--- figure does, for \incfiglibrary. Still a heuristic, so declining is
+--- a legitimate choice rather than a dismissal. Governed by
+--- config.confirm_missing_preamble ("ask"/"always"/"never").
+local function ensure_graphicx_preamble()
+  if graphicx_is_available() then
     return
   end
 
@@ -723,27 +765,28 @@ local function ensure_incfig_preamble()
     return
   end
   if mode == "always" then
-    M.define_incfig(false)
+    insert_usepackage(GRAPHICS_PACKAGE, false)
     return
   end
 
   local response = vim.fn.confirm(
-    "\\incfig does not appear to be defined (checked buffer and loaded packages).\n\nInsert the preamble now?",
+    "\\includegraphics is not available (checked buffer and loaded packages).\n\nInsert \\usepackage{"
+      .. GRAPHICS_PACKAGE .. "} now?",
     "&Yes\n&No", 1
   )
   if response == 1 then
-    M.define_incfig(false)
+    insert_usepackage(GRAPHICS_PACKAGE, false)
   end
 end
 
 --- Warn and offer to insert \usepackage{lextern-ipe} if it doesn't
---- appear to be loaded yet -- needed for \incfiglib specifically.
---- Deliberately narrower than incfig_is_defined(): \incfig might
---- already be available some other way (buffer text, an external
---- class/package), but \incfiglib is only ever provided by this
---- package, so it needs its own presence check rather than reusing
---- ensure_incfig_preamble's. Governed by
---- config.confirm_missing_library_package ("ask"/"always"/"never").
+--- appear to be loaded yet -- needed for \incfiglibrary, which is how
+--- a library figure's environment finds its PDF without the library's
+--- absolute path leaking into the document. Deliberately narrower than
+--- ensure_graphicx_preamble's check: graphicx may well be available
+--- some other way, but \incfiglibrary only ever comes from this
+--- package. Governed by config.confirm_missing_library_package
+--- ("ask"/"always"/"never").
 local function ensure_library_package()
   if library_package_is_loaded() then
     return
@@ -759,7 +802,7 @@ local function ensure_library_package()
   end
 
   local response = vim.fn.confirm(
-    "\\incfiglib isn't available (\\usepackage{lextern-ipe} not found in this buffer or loaded packages).\n\nInsert it now?",
+    "\\incfiglibrary isn't available (\\usepackage{lextern-ipe} not found in this buffer or loaded packages).\n\nInsert it now?",
     "&Yes\n&No", 1
   )
   if response == 1 then
@@ -771,13 +814,14 @@ end
 -- Figure labelling
 -- ============================================================
 
--- The figure environment \incfig stands for, mirroring the
--- \providecommand{\incfig} body in templates/lextern-ipe.sty with
--- PATH/CAPTION/LABEL as placeholders. \incfig derives its label from
--- the path and takes no say in it, so :LabelFigure gives a figure a
--- label of the user's choosing by writing this environment out in
--- full. The two definitions have to stay in step; test_parsing checks
--- that they do.
+-- The figure environment this plugin writes, with PATH/CAPTION/LABEL
+-- as placeholders. It's what :AddFigure and :InsertFigure insert, and
+-- what :LabelFigure expands a legacy \incfig call into: a figure's
+-- label belongs in the document, where it can be read and changed,
+-- rather than derived from a path inside a macro. It mirrors the
+-- \providecommand{\incfig} body in templates/lextern-ipe.sty, which
+-- documents written against that macro still use; the two have to stay
+-- in step, and test_parsing checks that they do.
 local FIGURE_ENV = {
   "\\begin{figure}[htbp]",
   "    \\centering",
@@ -1536,29 +1580,53 @@ local function target_dir(use_library)
   return get_figures_dir()
 end
 
---- Build the figure-inclusion line for `name` in target_dir:
---- \incfiglib{name}{} for the library (the package resolves the path
---- and labels it fig:lib:name), \incfig{reldir/name}{} for a per-file
---- figure. Also ensures the relevant preamble/package is present --
---- just the package check for the library (\incfiglib only comes from
---- the package, which provides \incfig too, so a separate \incfig
---- prompt would only ever offer to insert the same line twice).
-local function incfig_line(use_library, name)
+--- Build the figure environment that includes `name` from
+--- target_dir: labelled fig:name (fig:lib:name in the library) and
+--- pointing at \incfiglibrary/name for a library figure, so the
+--- library's absolute path never lands in the document. Also ensures
+--- the preamble it needs is there -- graphicx, or the package for a
+--- library figure (which requires graphicx itself, so one prompt
+--- covers both).
+local function figure_block(use_library, name)
   if use_library then
     ensure_library_package()
-    return string.format("\\incfiglib{%s}{}", name)
+    return figure_env_lines("\\incfiglibrary/" .. name, "", derived_label(true, name), "")
   end
-  ensure_incfig_preamble()
-  return string.format("\\incfig{%s/%s}{}", get_figures_reldir(), name)
+  ensure_graphicx_preamble()
+  return figure_env_lines(get_figures_reldir() .. "/" .. name, "", derived_label(false, name), "")
 end
 
---- Insert the inclusion line at cursor for `name` in
---- target_dir(use_library), leaving the cursor on the caption's
---- closing brace so `i` types straight into it.
-local function insert_incfig_line(use_library, name)
-  local line = incfig_line(use_library, name)
-  local lnum = insert_at_cursor(line)
-  vim.api.nvim_win_set_cursor(0, { lnum, #line - 1 })
+--- Insert the figure environment for `name` at the cursor, leaving the
+--- cursor on the caption's closing brace so `i` types straight into
+--- it. Warns if the label it carries is already taken -- two copies of
+--- one figure need two labels, and :LabelFigure is how you give them.
+local function insert_figure_block(use_library, name)
+  local block = figure_block(use_library, name)
+  local label = derived_label(use_library, name)
+  local taken = label_used_elsewhere(label, nil)
+
+  -- A float inside a float is a LaTeX error ("not in outer par mode"),
+  -- and the cursor is left inside the environment after every insert
+  -- (on the caption), so inserting from there would nest one figure in
+  -- the last. Drop past the enclosing \end{figure} instead.
+  local row = vim.api.nvim_win_get_cursor(0)[1]
+  local enclosing = figure_env_at(row)
+  if enclosing then
+    vim.api.nvim_win_set_cursor(0, { enclosing.last, 0 })
+  end
+
+  local last = insert_at_cursor(table.concat(block, "\n"))
+  for i, line in ipairs(block) do
+    if line:find("\\caption{", 1, true) then
+      vim.api.nvim_win_set_cursor(0, { last - #block + i, #line - 1 })
+    end
+  end
+
+  if taken then
+    vim.notify(string.format(
+      "%s is now used by two \\labels; LaTeX will report it as multiply defined (:LabelFigure renames one)", label
+    ), vim.log.levels.WARN)
+  end
 end
 
 --- Resolve the target directory *without creating it* and list its
@@ -1624,13 +1692,13 @@ function M.create_figure(use_library)
       return
     end
 
-    insert_incfig_line(use_library, filename)
+    insert_figure_block(use_library, filename)
 
     open_ipe(ipe_path)
     ensure_watcher(dir)
     -- Export the (empty) figure right away so the document compiles
-    -- immediately -- the \incfig line is already in the buffer, and
-    -- the watcher only sees saves from here on.
+    -- immediately -- the figure environment is already in the buffer,
+    -- and the watcher only sees saves from here on.
     run_export(dir, filename .. ".ipe")
 
     vim.notify("Created: " .. filename .. ".ipe", vim.log.levels.INFO)
@@ -1676,18 +1744,18 @@ function M.insert_figure(use_library)
       return
     end
 
-    insert_incfig_line(use_library, selected)
+    insert_figure_block(use_library, selected)
   end)
 end
 
---- Give a figure a label of your own choosing: \ref{fig:banach} rather
---- than \ref{fig:diagram-3}. \incfig derives its label from the path
---- and takes no argument for one, so the call is expanded into the
---- figure environment it stands for, with the label written out in
---- full; relabelling an already-expanded figure just rewrites its
---- \label. Either way, references to the old label in this buffer
---- follow the rename. The figure has to be included in this buffer
---- already -- :InsertFigure is what adds one.
+--- Give a figure a label of your own choosing: \ref{fig:banach}
+--- rather than \ref{fig:diagram-3}. Normally this just rewrites the
+--- \label of the figure environment :AddFigure inserted; a legacy
+--- \incfig call, which derives its label from the path and takes no
+--- argument for one, is expanded into the environment it stands for
+--- with the label written out. Either way, references to the old label
+--- in this buffer follow the rename. The figure has to be included in
+--- this buffer already -- :InsertFigure is what adds one.
 function M.label_figure(use_library)
   local ok_buf, buf_err = check_tex_buffer()
   if not ok_buf then
@@ -1814,6 +1882,7 @@ M._internal = {
   extract_arg_names = extract_arg_names,
   end_of_command = end_of_command,
   incfig_is_defined = incfig_is_defined,
+  graphicx_is_available = graphicx_is_available,
   library_package_is_loaded = library_package_is_loaded,
   sanitize_filename = sanitize_filename,
   read_stylesheet = read_stylesheet,

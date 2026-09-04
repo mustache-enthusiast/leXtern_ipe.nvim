@@ -40,12 +40,17 @@ vim.api.nvim_win_set_cursor(0, { 4, 0 }) -- the blank line
 M.create_figure(false)
 local line4 = vim.api.nvim_buf_get_lines(0, 3, 4, false)[1]
 local cur = vim.api.nvim_win_get_cursor(0)
-T.check("blank line replaced by \\incfig", line4 == "\\incfig{doc_figures/alpha}{}", line4)
-T.check("cursor on the caption's closing brace", cur[1] == 4 and cur[2] == #line4 - 1 and line4:sub(cur[2] + 1, cur[2] + 1) == "}", cur)
+T.check("blank line replaced by the figure environment", line4 == "\\begin{figure}[htbp]", line4)
+local caption = vim.api.nvim_buf_get_lines(0, 6, 7, false)[1]
+T.check("cursor on the caption's closing brace",
+  cur[1] == 7 and caption == "    \\caption{}" and cur[2] == #caption - 1 and caption:sub(cur[2] + 1, cur[2] + 1) == "}",
+  { cur, caption })
 vim.api.nvim_win_set_cursor(0, { 3, 0 }) -- the "x" line
 T.answers.input = "Beta"
 M.create_figure(false)
-T.check("non-blank line: inserted below it", vim.api.nvim_buf_get_lines(0, 3, 4, false)[1] == "\\incfig{doc_figures/beta}{}")
+T.check("non-blank line: inserted below it", vim.api.nvim_buf_get_lines(0, 3, 4, false)[1] == "\\begin{figure}[htbp]", T.buffer())
+T.check("beta's environment closed before alpha's begins",
+  T.buffer():find("\\label{fig:beta}\n\\end{figure}\n\\begin{figure}", 1, true) ~= nil, T.buffer())
 
 -- existing figure
 T.reset()
@@ -61,10 +66,28 @@ T.answers.confirm = 2
 T.answers.input = "Gamma"
 T.reset()
 M.create_figure(true)
-T.check("--lib with nothing defined: exactly one prompt, about \\incfiglib", #T.confirms == 1 and T.confirms[1]:find("\\incfiglib isn't available", 1, true) ~= nil, T.confirms)
-T.check("--lib: figure line inserted regardless", vim.fn.search("\\\\incfiglib{gamma}{}", "nw") > 0)
+T.check("--lib with nothing defined: exactly one prompt, about \\incfiglibrary", #T.confirms == 1 and T.confirms[1]:find("\\incfiglibrary isn't available", 1, true) ~= nil, T.confirms)
+T.check("--lib: figure inserted regardless", vim.fn.search("incfiglibrary/gamma.pdf", "nw") > 0)
 T.check("--lib: declined, so no \\usepackage", vim.fn.search("usepackage{lextern-ipe}", "nw") == 0)
 T.answers.confirm = 1
+
+-- a per-file figure in a document with no graphics package: one prompt,
+-- and graphicx is what gets inserted -- the environment is written out
+-- in full, so it needs nothing from this plugin's package
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { "\\documentclass{article}", "\\begin{document}", "", "\\end{document}" })
+vim.api.nvim_win_set_cursor(0, { 3, 0 })
+T.answers.input = "Epsilon"
+T.reset()
+M.create_figure(false)
+T.check("no graphicx: one prompt, about \\includegraphics",
+  #T.confirms == 1 and T.confirms[1]:find("\\includegraphics is not available", 1, true) ~= nil, T.confirms)
+T.check("accepted: \\usepackage{graphicx} inserted after \\documentclass",
+  vim.api.nvim_buf_get_lines(0, 1, 2, false)[1] == "\\usepackage{graphicx}", T.buffer())
+T.check("a per-file figure needs no lextern-ipe", vim.fn.search("lextern-ipe", "nw") == 0)
+T.reset()
+T.answers.input = "Zeta"
+M.create_figure(false)
+T.check("graphicx now present: no second prompt", #T.confirms == 0, T.confirms)
 
 -- :DefineIncfig without a prior package file generates it
 local sty = vim.fn.stdpath("data") .. "/lextern_ipe/lextern-ipe.sty"
@@ -72,7 +95,8 @@ os.remove(sty)
 T.check("precondition: package removed", vim.fn.filereadable(sty) == 0)
 M.define_incfig(false)
 T.check(":DefineIncfig regenerated the package", vim.fn.filereadable(sty) == 1)
-T.check("\\usepackage inserted after \\documentclass", vim.api.nvim_buf_get_lines(0, 1, 2, false)[1] == "\\usepackage{lextern-ipe}", T.buffer())
+T.check("\\usepackage inserted after the last \\usepackage",
+  T.buffer():find("\\usepackage{graphicx}\n\\usepackage{lextern%-ipe}\n\\begin{document}") ~= nil, T.buffer())
 
 -- setup() twice leaves one autocmd
 M.setup({})

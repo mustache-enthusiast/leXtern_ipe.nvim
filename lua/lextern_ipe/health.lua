@@ -54,9 +54,9 @@ function M.check()
   check_executable("kpsewhich", {
     required = false,
     advice = {
-      "Used to resolve whether \\incfig is defined by a loaded \\documentclass/\\usepackage.",
+      "Used to resolve whether graphicx is loaded by a \\documentclass/\\usepackage the document uses.",
       "Without it, :AddFigure/:InsertFigure fall back to checking only the current buffer's text,"
-        .. " so a custom .cls/.sty that defines \\incfig will trigger the preamble prompt every time.",
+        .. " so a custom .cls/.sty that loads graphicx will trigger the preamble prompt every time.",
     },
   })
 
@@ -197,6 +197,8 @@ function M.check()
       })
     else
       vim.health.warn("\\usepackage{lextern-ipe} will not be found by LaTeX -- TEXINPUTS isn't set up", {
+        "Only figure library figures need it (for \\incfiglibrary); a document's own figures need"
+          .. " nothing but graphicx.",
         "Add this directory to TEXINPUTS in your shell profile:",
         'export TEXINPUTS="' .. vim.fn.stdpath("data") .. '/lextern_ipe//:$TEXINPUTS"',
         "(This checks Neovim's own environment. If you start Neovim from a desktop launcher"

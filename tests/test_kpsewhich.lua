@@ -1,5 +1,5 @@
--- Resolving \incfig / lextern-ipe through loaded classes and packages
--- via kpsewhich: batching (one process per level) and caching.
+-- Resolving graphicx / \incfig / lextern-ipe through loaded classes and
+-- packages via kpsewhich: batching (one process per level) and caching.
 
 T.requires("kpsewhich")
 
@@ -66,5 +66,23 @@ M.config.kpsewhich_depth = 0
 vim.api.nvim_buf_set_lines(0, -1, -1, false, { "% bump" })
 found, n = probe(I.incfig_is_defined)
 T.check("depth 0: no kpsewhich at all", found == false and n == 0, n)
+
+-- graphicx, which is what an inserted figure environment actually needs
+M.config.kpsewhich_depth = 2
+T.edit_tex("gfx.tex", { "\\documentclass{article}", "\\usepackage{graphicx}", "\\begin{document}", "\\end{document}" })
+found, n = probe(I.graphicx_is_available)
+T.check("graphicx in the buffer: found without kpsewhich", found == true and n == 0, n)
+
+T.edit_tex("gfx-pkg.tex", { "\\documentclass{article}", "\\usepackage{lextern-ipe}", "\\begin{document}", "\\end{document}" })
+found, n = probe(I.graphicx_is_available)
+T.check("lextern-ipe requires graphicx, so that counts", found == true and n == 0, n)
+
+T.edit_tex("gfx-none.tex", { "\\documentclass{article}", "\\usepackage{amsmath}", "\\begin{document}", "\\end{document}" })
+T.check("no graphics package anywhere: not available", probe(I.graphicx_is_available) == false)
+
+T.edit_tex("gfx-class.tex", { "\\documentclass{gfxcls}", "\\begin{document}", "\\end{document}" })
+T.write(texmf .. "/gfxcls.cls", "\\ProvidesClass{gfxcls}\n\\LoadClass{article}\n\\RequirePackage{graphicx}\n")
+T.check("graphicx pulled in by the document class: found at depth 2",
+  probe(I.graphicx_is_available) == true)
 
 T.done()

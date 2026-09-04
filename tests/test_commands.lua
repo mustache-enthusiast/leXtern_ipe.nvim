@@ -33,8 +33,15 @@ T.edit_tex("doc.tex", {
 vim.api.nvim_win_set_cursor(0, { 5, 0 })
 T.answers.input = "Alpha Beta!"
 vim.cmd("AddFigure")
-T.check("preamble inserted after the last \\usepackage", T.buffer():find("\\usepackage{graphicx}\n\\usepackage{lextern%-ipe}\n\\begin{document}") ~= nil, T.buffer())
-T.check("\\incfig line inserted on the blank line", vim.api.nvim_buf_get_lines(0, 5, 6, false)[1] == "\\incfig{doc_figures/alpha-beta}{}", T.buffer())
+T.check("graphicx already loaded, so no package inserted", T.buffer():find("lextern-ipe", 1, true) == nil, T.buffer())
+T.check("figure environment inserted on the blank line", table.concat(vim.api.nvim_buf_get_lines(0, 4, 10, false), "\n") == table.concat({
+  "\\begin{figure}[htbp]",
+  "    \\centering",
+  "    \\includegraphics[width=0.8\\linewidth]{doc_figures/alpha-beta.pdf}",
+  "    \\caption{}",
+  "    \\label{fig:alpha-beta}",
+  "\\end{figure}",
+}, "\n"), T.buffer())
 local ipe = T.here .. "/doc_figures/alpha-beta.ipe"
 T.check("alpha-beta.ipe created", vim.fn.filereadable(ipe) == 1)
 local ipetext = T.read(ipe)
@@ -54,14 +61,21 @@ T.check("no export error", not T.noted("Export failed"), T.notes)
 -- :AddFigure --lib
 T.answers.input = "Gamma"
 vim.cmd("AddFigure --lib")
-T.check("\\incfiglib line inserted", T.buffer():find("\\incfiglib{gamma}{}", 1, true) ~= nil)
+T.check("library figure goes through \\incfiglibrary", T.buffer():find("{\\incfiglibrary/gamma.pdf}", 1, true) ~= nil, T.buffer())
+T.check("library figure labelled fig:lib:gamma", T.buffer():find("\\label{fig:lib:gamma}", 1, true) ~= nil)
+T.check("--lib inserted the package after the last \\usepackage", T.buffer():find("\\usepackage{graphicx}\n\\usepackage{lextern%-ipe}\n\\begin{document}") ~= nil, T.buffer())
 T.check("gamma.ipe in the library", vim.fn.filereadable(T.here .. "/lib/gamma.ipe") == 1)
 T.check("still exactly one \\usepackage{lextern-ipe}", select(2, T.buffer():gsub("\\usepackage{lextern%-ipe}", "")) == 1)
 T.check("library watcher started", M._watchers[T.here .. "/lib/"] ~= nil)
 
--- :InsertFigure picks an existing figure
+-- :InsertFigure picks an existing figure, and says so when that leaves
+-- two figures sharing a label
+T.reset()
 vim.cmd("InsertFigure")
-T.check(":InsertFigure inserted a second reference", select(2, T.buffer():gsub("\\incfig{doc_figures/alpha%-beta}{}", "")) == 2)
+T.check(":InsertFigure inserted a second copy", select(2, T.buffer():gsub("doc_figures/alpha%-beta%.pdf", "")) == 2, T.buffer())
+T.check(":InsertFigure warned about the duplicate label", T.noted("fig:alpha-beta is now used by two"), T.notes)
+T.check(":InsertFigure did not nest it in the previous figure",
+  T.buffer():find("\\end{figure}\n\\begin{figure}", 1, true) ~= nil, T.buffer())
 
 -- :DefineIncfig with confirm_duplicate_preamble = "never"
 vim.cmd("DefineIncfig")
@@ -88,14 +102,17 @@ T.check("completion: '--x' -> nothing", #vim.fn.getcompletion("AddFigure --x", "
 -- carrying the label, and takes the \ref along with it
 vim.api.nvim_win_set_cursor(0, { 6, 0 })
 T.answers.input = "banach"
+local before = select(2, T.buffer():gsub("\\begin{figure}", ""))
 T.reset()
 vim.cmd("LabelFigure")
-T.check(":LabelFigure warns about the second reference", T.noted("appears 2 times"), T.notes)
-T.check(":LabelFigure wrote the label", T.buffer():find("\\label{fig:banach}", 1, true) ~= nil, T.buffer())
+T.check(":LabelFigure warns about the second copy", T.noted("appears 2 times"), T.notes)
+T.check(":LabelFigure rewrote the label in place", select(2, T.buffer():gsub("\\label{fig:banach}", "")) == 1, T.buffer())
 T.check(":LabelFigure updated the \\ref", T.buffer():find("\\ref{fig:banach}", 1, true) ~= nil, T.buffer())
-T.check(":LabelFigure left the other \\incfig alone", select(2, T.buffer():gsub("\\incfig{doc_figures/alpha%-beta}{}", "")) == 1)
+T.check(":LabelFigure left the other copy labelled as it was", T.buffer():find("\\label{fig:alpha-beta}", 1, true) ~= nil)
+T.check(":LabelFigure added no environment", select(2, T.buffer():gsub("\\begin{figure}", "")) == before, T.buffer())
 
--- compile the document, if there's a LaTeX
+-- compile the document, if there's a LaTeX. The trailing \incfig is a
+-- document written against the old macro: the package still defines it.
 T.wait_for(function() return M._watchers[T.here .. "/lib/"].exports >= 1 end)
 vim.api.nvim_buf_set_lines(0, -2, -2, false, { "\\incfig{\\incfiglibrary/gamma}{legacy reference}" })
 vim.cmd("silent write")
@@ -112,6 +129,7 @@ if vim.fn.executable("pdflatex") == 1 then
   T.check("pdflatex: fig:lib:gamma label defined", aux:find("\\newlabel{fig:lib:gamma}", 1, true) ~= nil)
   T.check("pdflatex: per-file label defined", aux:find("\\newlabel{fig:alpha-beta}", 1, true) ~= nil)
   T.check("pdflatex: :LabelFigure label defined", aux:find("\\newlabel{fig:banach}", 1, true) ~= nil)
+  T.check("pdflatex: no floats nested", out:find("Not in outer par mode", 1, true) == nil)
   T.check("pdflatex: legacy \\incfiglibrary reference still works", aux:find("\\newlabel{fig:gamma}", 1, true) ~= nil)
 else
   print("SKIP (partial): pdflatex not on PATH, document compile not checked")
